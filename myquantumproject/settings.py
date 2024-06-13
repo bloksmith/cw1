@@ -32,18 +32,11 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     'app.cashewstable.com',
     'cashewstable.com',
+    'app2.cashewstable.com'
 ]
 
 
-ASGI_APPLICATION = 'myquantumproject.asgi.application'
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [("127.0.0.1", 6379)],
-        },
-    },
-}
+
 
 import os
 from pathlib import Path
@@ -218,3 +211,13 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+ASGI_APPLICATION = 'myquantumproject.asgi.application'
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
+}

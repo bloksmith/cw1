@@ -674,6 +674,8 @@ body {
 
     <section id="network-status">
         <h2><i class="fas fa-network-wired"></i> Network Status</h2>
+		<button id="view-network-status-button" class="btn btn-primary">View Network Status</button>
+
         <button id="view-network-chart" class="btn btn-primary" data-toggle="modal" data-target="#networkChartModal">
             <i class="fas fa-chart-line"></i> View Network Chart
         </button>
@@ -2694,6 +2696,32 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 });
             });
+        });
+    </script>
+    <script>
+        $('#view-network-status-button').click(async function() {
+            const response = await fetch('/network_status/', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}',
+                },
+            });
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Network status data:', data);
+                const syncStatus = data.is_synchronized ? "Nodes are synchronized" : "Nodes are not synchronized";
+
+                $('#sync-status').text(syncStatus);
+                $('#node1-latest-transaction').text(data.node1_latest_transaction ? JSON.stringify(data.node1_latest_transaction, null, 2) : 'No data');
+                $('#node1-transaction-pool').text(data.node1_transaction_pool ? JSON.stringify(data.node1_transaction_pool, null, 2) : 'No data');
+                $('#node2-latest-transaction').text(data.node2_latest_transaction ? JSON.stringify(data.node2_latest_transaction, null, 2) : 'No data');
+                $('#node2-transaction-pool').text(data.node2_transaction_pool ? JSON.stringify(data.node2_transaction_pool, null, 2) : 'No data');
+
+                $('#networkStatusModal').modal('show');
+            } else {
+                alert('Failed to fetch network status');
+            }
         });
     </script>
 
