@@ -38,7 +38,7 @@ def start_scheduler():
     scheduler.add_job(
         periodic_synchronization_check,
         trigger="interval",
-        seconds=0.001,
+        seconds=60,  # Adjust this interval as needed
         id="sync_check",
         replace_existing=True,
     )

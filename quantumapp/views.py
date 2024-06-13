@@ -5333,6 +5333,29 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from django.conf import settings
+import json
+import os
+from django.core.management import call_command
+from django.utils import timezone
+from .models import Node  # Assuming you have a Node model
+
+# Register the node with the master node
+def register_with_master_node():
+    master_node_url = os.getenv('MASTER_NODE_URL')
+    current_node_url = os.getenv('CURRENT_NODE_URL')
+    if master_node_url and current_node_url:
+        try:
+            response = requests.post(f"{master_node_url}/api/register_node/", json={'url': current_node_url})
+            if response.status_code == 200:
+                print("Successfully registered with master node.")
+            else:
+                print("Failed to register with master node.")
+        except Exception as e:
+            print(f"Error registering with master node: {e}")
+
+# Call the registration function during Django startup
+register_with_master_node()
 
 @csrf_exempt
 @login_required
@@ -5367,7 +5390,13 @@ def fetch_node_data(node_url):
     }
 
 def check_node_synchronization():
-    master_node_url = "https://app.cashewstable.com"
+    master_node_url = os.getenv('MASTER_NODE_URL')
+    if not master_node_url:
+        return {
+            "is_synchronized": False,
+            "message": "MASTER_NODE_URL environment variable is not set",
+        }
+
     nodes = get_active_nodes(master_node_url)
 
     if len(nodes) < 2:
@@ -5396,3 +5425,35 @@ def check_node_synchronization():
 def get_network_status(request):
     sync_status = check_node_synchronization()
     return JsonResponse(sync_status)
+
+# Periodic sync check using Django management command
+from django.core.management.base import BaseCommand
+
+class Command(BaseCommand):
+    help = 'Sync with master node'
+
+    def handle(self, *args, **kwargs):
+        master_node_url = os.getenv('MASTER_NODE_URL')
+        if not master_node_url:
+            self.stdout.write(self.style.ERROR('MASTER_NODE_URL is not set'))
+            return
+        
+        try:
+            response = requests.get(f"{master_node_url}/api/get_latest_data/")
+            if response.status_code == 200:
+                data = response.json()
+                # Process data (transactions, blocks, etc.)
+                self.stdout.write(self.style.SUCCESS('Successfully synced with master node.'))
+            else:
+                self.stdout.write(self.style.ERROR('Failed to sync with master node.'))
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Error syncing with master node: {e}"))
+
+# Ensure to set up a cron job or a Celery task to call this command periodically
+# For example, add this to a Celery task
+
+from celery import shared_task
+
+@shared_task
+def sync_with_master_node():
+    call_command('sync_with_master')

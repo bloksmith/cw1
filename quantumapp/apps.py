@@ -9,4 +9,4 @@ class QuantumappConfig(AppConfig):
         import quantumapp.signals  # Import the signals module
         if os.environ.get('RUN_MAIN', None) != 'true' and 'migrate' not in sys.argv:
             from .scheduler import start_scheduler
-            #start_scheduler()
+            start_scheduler()
