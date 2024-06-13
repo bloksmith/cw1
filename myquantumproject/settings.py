@@ -35,6 +35,10 @@ ALLOWED_HOSTS = [
     'app2.cashewstable.com'
 ]
 
+# myquantumproject/settings.py
+
+MASTER_NODE_URL = "https://app.cashewstable.com"
+CURRENT_NODE_URL = "https://app3.cashewstable.com"
 
 
 
