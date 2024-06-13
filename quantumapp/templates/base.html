@@ -1,0 +1,55 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DagKnight Blockchain Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/web3/dist/web3.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bignumber.js/9.0.1/bignumber.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.11.0/umd/popper.min.js"></script>
+
+    <style>
+        .modal-content { background-color: #f8f9fa; border-radius: 10px; }
+        .modal-header { border-bottom: none; }
+        .modal-body p { background-color: #ffffff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); }
+        .modal-body pre { background-color: #f8f9fa; padding: 10px; border-radius: 5px; overflow: auto; }
+        .sync-status { font-weight: bold; color: green; }
+        .sync-status.error { color: red; }
+        .search-bar { width: 100%; padding: 15px; background-color: #f1f1f1; margin-bottom: 20px; }
+        .search-bar input[type="text"] { width: 80%; padding: 10px; margin-right: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .search-bar button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; }
+        body { display: flex; }
+        .sidebar { width: 250px; height: 100vh; background-color: #343a40; padding: 20px; position: fixed; }
+        .sidebar ul { list-style-type: none; padding: 0; }
+        .sidebar ul li { margin: 20px 0; }
+        .sidebar ul li a { color: white; text-decoration: none; font-size: 18px; display: block; padding: 10px; border-radius: 5px; }
+        .sidebar ul li a:hover { background-color: #495057; }
+        .content { margin-left: 270px; padding: 20px; width: 100%; }
+		
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2><img src="{% static '/images/logo.png' %}" alt="DagKnight Logo" style="width: 206px;"></h2>
+        <ul>
+            <li><a href="{% url 'dashboard' %}"><i class="fas fa-home"></i> Dashboard</a></li>
+            <li><a href="{% url 'market' %}"><i class="fas fa-chart-line"></i> Market</a></li>
+            <li><a href="{% url 'trading_bot' %}"><i class="fas fa-robot"></i> Trading Bot</a></li>
+        </ul>
+    </div>
+    <div class="content">
+        {% block content %}
+        {% endblock %}
+    </div>
+    <footer>
+        <p>&copy; 2024 DagKnight Blockchain. All rights reserved.</p>
+    </footer>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+</body>
+</html>

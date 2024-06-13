@@ -1,0 +1,2705 @@
+
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Dashboard - DagKnight Blockchain{% endblock %}
+{% block content %}
+<header>
+            <img src="{% static '/images/banner.png.webp' %}" alt="Welcome to DagKnight Blockchain" style="width: 100%; height: auto;">
+    <nav>
+        <ul>
+            <li><a href="#network-status"><i class="fas fa-network-wired"></i><br> Network Status</a></li>
+            <li><a href="#create-transaction"><i class="fas fa-exchange-alt"></i><br> Create Transaction</a></li>
+            <li><a href="#create-wallet"><i class="fas fa-wallet"></i> <br>Create Wallet</a></li>
+            <li><a href="#import-wallet"><i class="fas fa-file-import"></i> <br>Import Wallet</a></li>
+            <li><a href="#wallet-usecases"><i class="fas fa-briefcase"></i> <br>Wallet Use Cases</a></li>
+            <li><a href="#mine-block"><i class="fas fa-gem"></i> <br>Mine a Block</a></li>
+            <li><a href="#create-pool"><i class="fas fa-users-cog"></i> <br>Create Pool</a></li>
+            <li><a href="#join-pool"><i class="fas fa-user-plus"></i> <br>Join Pool</a></li>
+            <li><a href="#wallet-details"><i class="fas fa-wallet"></i> <br>Wallet Details</a></li>
+        </ul>
+    </nav>
+</header>
+<style>
+        .modal-content {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+        }
+        .modal-header {
+            border-bottom: none;
+        }
+        .modal-body p {
+            background-color: #ffffff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .modal-body pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        .sync-status {
+            font-weight: bold;
+            color: green;
+        }
+        .sync-status.error {
+            color: red;
+        }
+      /* Search bar styles */
+.search-bar {
+    position: relative;
+    width: 100%;
+    max-width: 600px;
+    margin: 20px auto;
+    background: linear-gradient(135deg, #2b2d42, #3a3d5c);
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.search-bar form {
+    display: flex;
+    flex-direction: column;
+}
+
+.search-bar .form-group {
+    margin-bottom: 15px;
+}
+
+.search-bar label {
+    color: #edf2f4;
+    font-weight: bold;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+.search-bar input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.search-bar button {
+    padding: 10px 20px;
+    background-color: #2b2d42;
+    border: none;
+    border-radius: 5px;
+    color: #edf2f4;
+    font-weight: bold;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+.search-bar button:hover {
+    background-color: #3a3d5c;
+}
+
+/* Dropdown results styles */
+#searchResultsDropdown {
+    position: absolute;
+    top: calc(100% + 10px);
+    width: 100%;
+    max-height: 200px;
+    overflow-y: auto;
+    background: #edf2f4;
+    border-radius: 5px;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+    display: none;
+    z-index: 1000;
+}
+
+#searchResultsDropdown ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+#searchResultsDropdown li {
+    padding: 10px;
+    border-bottom: 1px solid #ccc;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+#searchResultsDropdown li:hover {
+    background: #dfe7ef;
+}
+
+/* Spinner styles */
+.spinner {
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top: 4px solid #edf2f4;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+    </style>    <style>
+        body {
+            display: flex;
+        }
+        .sidebar {
+            width: 250px;
+            height: 100vh;
+            background-color: #343a40;
+            padding: 20px;
+            position: fixed;
+        }
+        .sidebar ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .sidebar ul li {
+            margin: 20px 0;
+        }
+        .sidebar ul li a {
+            color: white;
+            text-decoration: none;
+            font-size: 18px;
+            display: block;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .sidebar ul li a:hover {
+            background-color: #495057;
+        }
+        .content {
+            margin-left: 270px;
+            padding: 20px;
+            width: 100%;
+        }
+		/* Sidebar Styles */
+.sidebar {
+    height: 100%;
+    width: 250px;
+    position: fixed;
+    z-index: 1;
+    top: 0;
+    left: 0;
+    background-color: #111;
+    overflow-x: hidden;
+    transition: 0.5s;
+    padding-top: 60px;
+}
+
+.sidebar a {
+    padding: 10px 15px;
+    text-decoration: none;
+    font-size: 18px;
+    color: #818181;
+    display: block;
+    transition: 0.3s;
+}
+
+.sidebar a:hover {
+    color: #f1f1f1;
+}
+
+.sidebar .closebtn {
+    position: absolute;
+    top: 0;
+    right: 25px;
+    font-size: 36px;
+    margin-left: 50px;
+}
+
+.openbtn {
+    font-size: 20px;
+    cursor: pointer;
+    background-color: #111;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+}
+
+.openbtn:hover {
+    background-color: #444;
+}
+
+/* Main content */
+#main {
+    transition: margin-left .5s;
+    padding: 16px;
+}
+
+/* When the sidebar is expanded */
+.sidebar-expanded {
+    width: 250px;
+}
+
+/* When the sidebar is collapsed */
+.sidebar-collapsed {
+    width: 0;
+    display: none;
+}
+
+/* Menu icon when sidebar is collapsed */
+#menu-icon {
+    display: block;
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    font-size: 30px;
+    color: #111;
+    cursor: pointer;
+}
+
+@media screen and (max-height: 450px) {
+    .sidebar {padding-top: 15px;}
+    .sidebar a {font-size: 18px;}
+}/* Killer CSS for transactions table */
+.transactions-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.transactions-table th, .transactions-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+.transactions-table th {
+    background-color: #343a40;
+    color: white;
+}
+
+.transactions-table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+.transactions-table tr:hover {
+    background-color: #ddd;
+}
+
+/* Killer CSS for transactions table */
+.transactions-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.transactions-table th, .transactions-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+.transactions-table th {
+    background-color: #343a40;
+    color: white;
+}
+
+.transactions-table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+.transactions-table tr:hover {
+    background-color: #ddd;
+}
+
+    </style>  <style>
+/* Make the Wallet Details modal wider */
+.wide-modal {
+    width: 90%; /* Adjust the width as needed */
+    max-width: 1200px; /* Set a maximum width */
+}
+
+.modal-lg .modal-content {
+    width: 100%; /* Ensure the modal content takes full width */
+}
+
+/* Killer CSS for transactions table */
+.transactions-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.transactions-table th, .transactions-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+.transactions-table th {
+    background-color: #343a40;
+    color: white;
+}
+
+.transactions-table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+.transactions-table tr:hover {
+    background-color: #ddd;
+}.table {
+    width: 100%;
+    margin-bottom: 1rem;
+    color: #212529;
+    font-size: 10px;
+	.liquidity-pool-pitch {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+.liquidity-pool-pitch h2 {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #333;
+}
+
+.liquidity-pool-pitch p {
+    font-size: 16px;
+    color: #555;
+    line-height: 1.6;
+}
+.smart-contract-pitch {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+.smart-contract-pitch h2 {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #333;
+}
+
+.smart-contract-pitch p {
+    font-size: 16px;
+    color: #555;
+    line-height: 1.6;
+}
+/* General Styles */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f8f9fa;
+    margin: 0;
+    padding: 0;
+}
+
+/* Create Wallet Section */
+#create-wallet {
+    background: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    max-width: 400px;
+    margin: 40px auto;
+    text-align: center;
+}
+
+#create-wallet h2 {
+    font-size: 24px;
+    color: #333;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#create-wallet h2 i {
+    margin-right: 10px;
+    color: #007bff;
+}
+
+#create-wallet-form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#create-wallet-form .btn {
+    background-color: #007bff;
+    color: #ffffff;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: background-color 0.3s ease;
+}
+
+#create-wallet-form .btn i {
+    margin-right: 8px;
+}
+
+#create-wallet-form .btn:hover {
+    background-color: #0056b3;
+}
+
+#create-wallet-form .btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+#create-wallet-form .btn:active {
+    background-color: #004085;
+}
+
+</style>
+      <div class="modal fade" id="deployModal" tabindex="-1" aria-labelledby="deployModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalTitle">Deploying Contract...</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="spinner" class="spinner-border" role="status">
+          <span class="sr-only">Loading...</span>
+        </div>
+        <div id="deployDetails">
+          <p>Transaction Hash: <span id="transactionHash"></span></p>
+          <p>Contract Address: <span id="contractAddress"></span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>    <div class="modal fade" id="uniqueLoadingModal" tabindex="-1" role="dialog" aria-labelledby="uniqueLoadingModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content unique-modal-content">
+                <div class="modal-body text-center unique-modal-body">
+                    <div class="spinner-border unique-spinner" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                    <p class="unique-modal-text">Please wait while we process your transaction...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<!-- Modal -->
+<div class="modal fade" id="liquidityPoolSuccessModal" tabindex="-1" role="dialog" aria-labelledby="liquidityPoolSuccessModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="liquidityPoolSuccessModalLabel">Liquidity Pool Created Successfully!</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p><strong>Transaction Hash:</strong> <span id="txnHash"></span></p>
+                <p><strong>Contract Address:</strong> <span id="contractAddress"></span></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<div class="modal" id="sendTokenModal" tabindex="-1" role="dialog" aria-labelledby="sendTokenModalLabel" aria-hidden="true" style="z-index: 1051;">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="sendTokenModalLabel">Send Token</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="send-token-form">
+                    <div class="form-group">
+                        <label for="send-recipient">Recipient Address</label>
+                        <input type="text" class="form-control" id="send-recipient" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="send-amount">Amount</label>
+                        <input type="number" class="form-control" id="send-amount" step="any" required>
+                    </div>
+                    <input type="hidden" id="send-token-address">
+                    <button type="submit" class="btn btn-primary">Send</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Transaction Details Modal -->
+<div class="modal" id="transactionDetailsModal" tabindex="-1" role="dialog" aria-labelledby="transactionDetailsModalLabel" aria-hidden="true" style="z-index: 1052;">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="transactionDetailsModalLabel">Transaction Details</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p><strong>Transaction Hash:</strong> <span id="transaction-hash"></span></p>
+                <!-- Add other transaction details if necessary -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Burn Token Modal -->
+<div class="modal" id="burnTokenModal" tabindex="-1" role="dialog" aria-labelledby="burnTokenModalLabel" aria-hidden="true" style="z-index: 1051;">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="burnTokenModalLabel">Burn Token</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="burn-token-form">
+                    <div class="form-group">
+                        <label for="burn-amount">Amount</label>
+                        <input type="number" class="form-control" id="burn-amount" step="any" required>
+                    </div>
+                    <input type="hidden" id="burn-token-address">
+                    <button type="submit" class="btn btn-danger">Burn</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Mint Token Modal -->
+<div class="modal" id="mintTokenModal" tabindex="-1" role="dialog" aria-labelledby="mintTokenModalLabel" aria-hidden="true" style="z-index: 1051;">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="mintTokenModalLabel">Mint Token</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="mint-token-form">
+                    <div class="form-group">
+                        <label for="mint-amount">Amount</label>
+                        <input type="number" class="form-control" id="mint-amount" step="any" required>
+                    </div>
+                    <input type="hidden" id="mint-token-address">
+                    <button type="submit" class="btn btn-success">Mint</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="networkChartModal" tabindex="-1" aria-labelledby="networkChartModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="networkChartModalLabel"><i class="fas fa-chart-line"></i> Network Chart</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <canvas id="networkChartCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- DAG Chart Modal -->
+<div class="modal fade" id="dagChartModal" tabindex="-1" aria-labelledby="dagChartModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dagChartModalLabel"><i class="fas fa-project-diagram"></i> DAG Chart</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <canvas id="dagChartCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+</div><div class="container">
+    <section id="intro">
+        <p><i class="fas fa-info-circle"></i> Experience the next generation of blockchain technology with DagKnight. Secure, fast, and scalable.</p>
+    </section>
+
+    <div class="search-bar">
+        <form id="searchForm">
+            <div class="form-group">
+                <label for="searchQuery">Search for Token Address, Transaction Hash, or Wallet Address:</label>
+                <input type="text" class="form-control" id="searchQuery" name="query" required>
+                <div id="loadingSpinner" class="spinner" style="display: none;"></div>
+            </div>
+            <button type="submit" class="btn btn-primary">Search</button>
+        </form>
+        <div id="searchResultsDropdown">
+            <ul></ul>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <section id="wallet-details">
+        <h2><i class="fas fa-wallet"></i> Wallet Details</h2>
+        <button id="view-wallet-details-button" class="btn btn-primary">
+            <i class="fas fa-eye"></i> View Wallet Details
+        </button>
+        <button id="import-token-button" class="btn btn-secondary" data-toggle="modal" data-target="#importTokenModal">
+            <i class="fas fa-file-import"></i> Import Token
+        </button>
+    </section>
+
+    <section id="network-status">
+        <h2><i class="fas fa-network-wired"></i> Network Status</h2>
+        <button id="view-network-chart" class="btn btn-primary" data-toggle="modal" data-target="#networkChartModal">
+            <i class="fas fa-chart-line"></i> View Network Chart
+        </button>
+        <button id="view-dag-chart" class="btn btn-primary" data-toggle="modal" data-target="#dagChartModal">
+            <i class="fas fa-project-diagram"></i> View DAG Chart
+        </button>
+    </section>
+</div>
+
+    
+            <section id="create-transaction">
+    <h2><i class="fas fa-exchange-alt"></i> Create Transaction</h2>
+    <form id="transaction-form" action="{% url 'create_transaction' %}" method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="sender"><i class="fas fa-user"></i> Sender:</label>
+            <select id="sender" name="sender" class="form-control" required>
+                {% if wallets %}
+                    {% for wallet in wallets %}
+                        <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
+                    {% endfor %}
+                {% else %}
+                    <option value="" disabled>No wallets available</option>
+                {% endif %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
+            <input type="text" id="receiver" name="receiver" class="form-control" required>
+        </div>
+        <div class="form-group">
+            <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
+            <input type="number" id="amount" name="amount" class="form-control" required>
+        </div>
+        <div class="form-group">
+            <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
+            <input type="number" id="fee" name="fee" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
+    </form>
+</section>
+
+<div class="modal fade" id="transactionModal" tabindex="-1" role="dialog" aria-labelledby="transactionModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="transactionModalLabel">Transaction Result</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="modalMessage"></p>
+                <p>Transaction Hash: <span id="transactionHash"></span></p>
+                <p>Approval Time: <span id="approvalTime"></span> seconds</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="row">
+        <section id="create-wallet">
+            <h2><i class="fas fa-wallet"></i> Create Wallet</h2>
+            <form id="create-wallet-form" action="{% url 'register' %}" method="post">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary"><i class="fas fa-plus-circle"></i> Create Wallet</button>
+            </form>
+        </section>
+
+        <section id="import-wallet">
+            <h2><i class="fas fa-file-import"></i> Import Wallet</h2>
+            <form id="import-wallet-form" action="{% url 'import_wallet' %}" method="post">
+                {% csrf_token %}
+                <label for="mnemonic"><i class="fas fa-key"></i> 12-word Mnemonic:</label>
+                <input type="text" id="mnemonic" name="mnemonic" required><br><br>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-file-import"></i> Import Wallet</button>
+            </form>
+        </section>
+    </div>
+
+    <div class="row">
+        <section id="wallet-usecases">
+            <h2><i class="fas fa-briefcase"></i> Wallet Use Cases</h2>
+            <p>DagKnight wallets can be used for:</p>
+            <ul>
+                <li><i class="fas fa-exchange-alt"></i> Sending and receiving transactions</li>
+                <li><i class="fas fa-lock"></i> Storing cryptocurrency securely</li>
+                <li><i class="fas fa-th"></i> Participating in decentralized applications (dApps)</li>
+                <li><i class="fas fa-vote-yea"></i> Voting in blockchain governance</li>
+                <li><i class="fas fa-gavel"></i> Mining and staking</li>
+            </ul>
+        </section>
+
+        <section id="additional-usecases">
+            <h2><i class="fas fa-briefcase"></i> Additional Use Cases</h2>
+            <p>DagKnight wallets can also be used for:</p>
+            <ul>
+                <li><i class="fas fa-coins"></i> Participating in token sales (ICO/IDO)</li>
+                <li><i class="fas fa-piggy-bank"></i> Earning interest through lending</li>
+                <li><i class="fas fa-chart-line"></i> Accessing financial services (DeFi)</li>
+                <li><i class="fas fa-user-secret"></i> Conducting private transactions</li>
+            </ul>
+        </section>
+    </div>
+</div>
+
+    
+    <section id="mine-block">
+        <button id="start-mining-button" class="btn btn-primary">
+    <i class="fas fa-hammer"></i> Start Mining
+</button>
+<button id="stop-mining-button" class="btn btn-danger" style="display:none;">
+    <i class="fas fa-stop-circle"></i> Stop Mining
+</button>
+
+        
+        <div id="mining-stats">
+            <h3>Mining Statistics</h3>
+            <p><strong>Hashrate:</strong> <span id="hashrate">0</span> H/s</p>
+            <p><strong>Blocks Mined:</strong> <span id="blocks-mined">0</span></p>
+            <p><strong>Total Rewards:</strong> <span id="total-rewards">0</span> ETH</p>
+        </div>
+    </section>
+    
+    <section id="create-pool">
+        <h2><i class="fas fa-users-cog"></i> Create Pool</h2>
+        <form id="create-pool-form" action="{% url 'create_pool' %}" method="post">
+            {% csrf_token %}
+            <label for="pool_name"><i class="fas fa-user-edit"></i> Pool Name:</label>
+            <input type="text" id="pool_name" name="name" required><br><br>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus-circle"></i> Create Pool</button>
+        </form>
+    </section>
+
+    <section id="join-pool">
+        <h2><i class="fas fa-user-plus"></i> Join Pool</h2>
+        <form id="join-pool-form" action="/join_pool/" method="post">
+            {% csrf_token %}
+            <label for="pool_id"><i class="fas fa-id-card"></i> Pool ID:</label>
+            <input type="text" id="pool_id" name="pool_id" required><br><br>
+            <input type="hidden" id="hidden_pool_id" name="pool_id">
+            <button type="submit" class="btn btn-primary"><i class="fas fa-sign-in-alt"></i> Join Pool</button>
+        </form>
+    </section>
+
+    <section id="top-pools">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pool Name</th>
+                        <th>Number of Users</th>
+                        <th>Hashrate</th>
+                        <th>Rewards</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="pool-table-body">
+                    {% for pool in top_pools %}
+                        <tr>
+                            <td>{{ pool.name }}</td>
+                            <td>{{ pool.num_users }}</td>
+                            <td>{{ pool.hashrate }}</td>
+                            <td>{{ pool.rewards }}</td>
+                            <td>
+                                <form class="join-pool-form" action="/join_pool/{{ pool.id }}/" method="post">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-primary">Join Pool</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="smartcontract">
+    <div class="smart-contract-pitch">
+        <h2>Effortlessly Deploy Your Own Smart Contract</h2>
+        <p>
+            Take control of your digital assets and automate transactions with ease by deploying your own smart contract.
+            Our platform supports multiple networks including Ethereum, Polygon, and Binance Smart Chain, providing you
+            with the flexibility to choose the best option for your project. Whether you're creating a new token or automating
+            complex financial operations, our intuitive interface ensures a smooth and secure deployment process. Start building
+            the future of decentralized finance today!
+        </p>
+    </div>
+
+    <form id="deploy-contract-form">
+        <label for="name">Token Name:</label>
+        <input type="text" id="name" name="name" required><br>
+        <label for="symbol">Token Symbol:</label>
+        <input type="text" id="symbol" name="symbol" required><br>
+        <label for="initialSupply">Initial Supply:</label>
+        <input type="number" id="initialSupply" name="initialSupply" required><br>
+
+        <label for="network">Select Network:</label>
+        <select id="network" name="network" required>
+            <option value="ethereum">Ethereum (Mainnet)</option>
+            <option value="sepolia">Ethereum (Sepolia)</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="avalanche">Avalanche</option>
+            <option value="base">Base</option>
+            <option value="bsc">Binance Smart Chain</option>
+            <option value="celo">Celo</option>
+            <option value="fantom">Fantom</option>
+            <option value="optimism">Optimism</option>
+            <option value="polygon">Polygon</option>
+        </select><br>
+
+        <button type="submit" class="btn btn-primary">Deploy Contract</button>
+    </form>
+</section>
+
+	<section id="unique-create-pool-section" class="unique-create-pool">
+    <h2>Create Liquidity Pool</h2>
+	<div class="liquidity-pool-pitch">
+    <h3>Seamlessly Create Your Own Liquidity Pool</h3>
+    <p>
+        Dive into the world of decentralized finance with ease by creating your own liquidity pool on QuickSwap.
+        Enhance your trading experience, earn rewards, and provide liquidity for your favorite token pairs on the Polygon network.
+        With our intuitive interface, setting up a liquidity pool is straightforward and secure.
+        Join the decentralized revolution today and be a part of the next wave of financial innovation!
+    </p>
+</div>
+
+    <form id="unique-create-pool-form" class="unique-create-pool-form" method="post">
+        {% csrf_token %}
+        <div class="form-group unique-create-pool-form-group">
+            <label for="unique-token1Address" class="unique-create-pool-label">Token 1 Address:</label>
+            <input type="text" class="form-control unique-create-ppool-input" id="unique-token1Address" name="token1Address" required>
+        </div>
+        <div class="form-group unique-create-pool-form-group">
+            <label for="unique-token1Amount" class="unique-create-pool-label">Token 1 Amount:</label>
+            <input type="number" class="form-control unique-create-pool-input" id="unique-token1Amount" name="token1Amount" required>
+        </div>
+        <div class="form-group unique-create-pool-form-group">
+            <label for="unique-token2Address" class="unique-create-pool-label">Token 2 Address:</label>
+            <input type="text" class="form-control unique-create-pool-input" id="unique-token2Address" name="token2Address" required>
+        </div>
+        <div class="form-group unique-create-pool-form-group">
+            <label for="unique-token2Amount" class="unique-create-pool-label">Token 2 Amount:</label>
+            <input type="number" class="form-control unique-create-pool-input" id="unique-token2Amount" name="token2Amount" required>
+        </div>
+        <div class="form-group unique-create-pool-form-group">
+            <label for="unique-useNativeCoin" class="unique-create-pool-label">Use Native Coin:</label>
+            <input type="checkbox" id="unique-useNativeCoin" name="useNativeCoin" class="unique-create-pool-checkbox">
+        </div>
+        <button type="submit" class="btn btn-primary unique-create-pool-button">Create Pool</button>
+    </form>
+</section>
+
+
+
+
+
+    </div>
+
+    <footer>
+        <p>&copy; 2024 DagKnight Blockchain. All rights reserved.</p>
+    </footer>
+	<div class="modal fade" id="importTokenModal" tabindex="-1" role="dialog" aria-labelledby="importTokenModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="importTokenModalLabel"><i class="fas fa-file-import"></i> Import Token</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="import-token-form">
+                    {% csrf_token %}
+                    <div class="form-group">
+                        <label for="tokenName">Token Name:</label>
+                        <input type="text" class="form-control" id="tokenName" name="tokenName" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="tokenAddress">Token Contract Address:</label>
+                        <input type="text" class="form-control" id="tokenAddress" name="tokenAddress" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="tokenSymbol">Token Symbol:</label>
+                        <input type="text" class="form-control" id="tokenSymbol" name="tokenSymbol" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="initialSupply">Initial Supply:</label>
+                        <input type="number" class="form-control" id="initialSupply" name="initialSupply" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Import Token</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modals for token actions -->
+    <div class="modal fade" id="tokenActionModal" tabindex="-1" role="dialog" aria-labelledby="tokenActionModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="tokenActionModalLabel"></h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="token-action-form">
+                    {% csrf_token %}
+                    <input type="hidden" id="action-type" name="action_type">
+                    <input type="hidden" id="token-address" name="token_address">
+                    <div class="form-group" id="recipient-address-group">
+                        <label for="recipient-address">Recipient Address:</label>
+                        <input type="text" class="form-control" id="recipient-address" name="recipient">
+                    </div>
+                    <div class="form-group">
+                        <label for="amount">Amount:</label>
+                        <input type="number" class="form-control" id="amount" name="amount" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Submit</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>    <div class="modal fade" id="newWalletModal" tabindex="-1" aria-labelledby="newWalletModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="newWalletModalLabel">Wallet Created Successfully</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p><strong>Address:</strong> <span id="newWalletAddress"></span></p>
+                    <p><strong>Private Key:</strong> <span id="newWalletPrivateKey"></span></p>
+                    <p><strong>Mnemonic:</strong> <span id="newWalletMnemonic"></span></p>
+                    <p><strong>Balance:</strong> <span id="newWalletBalance"></span></p>
+                    <button id="addToMetaMask" class="btn btn-primary">Add to MetaMask</button>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+<div class="modal fade" id="searchResultsModal" tabindex="-1" role="dialog" aria-labelledby="searchResultsModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="searchResultsModalLabel">Search Results</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="searchResultsContent">
+                    <!-- Search results will be displayed here -->
+                </div>
+                <div id="paginationControls" class="d-flex justify-content-between mt-3">
+                    <button id="prevPage" class="btn btn-secondary" disabled>Previous</button>
+                    <button id="nextPage" class="btn btn-secondary" disabled>Next</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+        <!-- Wallet Modal -->
+        <!-- Wallet Modal -->
+<div class="modal fade" id="walletModal" tabindex="-1" role="dialog" aria-labelledby="walletModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg" role="document"> <!-- Add modal-lg for a larger modal -->
+        <div class="modal-content wide-modal"> <!-- Add custom class wide-modal -->
+            <div class="modal-header">
+                <h5 class="modal-title" id="walletModalLabel"><i class="fas fa-wallet"></i> Wallet Details</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p><strong>Alias:</strong><br><span id="wallet-alias"></span></p>
+                <p><strong>Address:</strong><br><span id="wallet-address"></span></p>
+                <p><strong>Public Key:</strong><br><span id="wallet-public-key"></span></p>
+                <p><strong>Private Key:</strong><br><span id="wallet-private-key"></span></p>
+                <p><strong>Balance:</strong><br><span id="wallet-balance"></span></p>
+                <h3>Custom Tokens</h3>
+                <table class="table table-striped" id="tokens-table">
+                    <thead>
+                        <tr>
+                            <th>Token</th>
+                            <th>Symbol</th>
+                            <th>Balance</th>
+                            <th>Address</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Tokens will be dynamically inserted here -->
+                    </tbody>
+                </table>
+                <h3>Recent Transactions</h3>
+                <table id="transactions-table" class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Hash</th>
+                            <th>Sender</th>
+                            <th>Receiver</th>
+                            <th>Amount</th>
+                            <th>Fee</th>
+                            <th>Timestamp</th>
+                            <th>Approved</th>
+                            <th>Shard</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Transactions will be dynamically inserted here -->
+                    </tbody>
+                </table>
+                <div id="pagination-controls">
+                    <!-- Pagination buttons will be dynamically inserted here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal"><i class="fas fa-times"></i> Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+    <!-- Success Modal -->
+    <div class="modal fade" id="successModal" tabindex="-1" role="dialog" aria-labelledby="successModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="successModalLabel">Deployment Successful</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    Contract deployed successfully at address: <span id="contractAddress"></span>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="networkStatusModal" tabindex="-1" role="dialog" aria-labelledby="networkStatusModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="networkStatusModalLabel"><i class="fas fa-network-wired"></i> Network Details</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="network-status-section">
+                        <h6>Synchronization Status:</h6>
+                        <pre id="sync-status"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 1 Latest Transaction:</h6>
+                        <pre id="node1-latest-transaction"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 1 Transaction Pool:</h6>
+                        <pre id="node1-transaction-pool"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 2 Latest Transaction:</h6>
+                        <pre id="node2-latest-transaction"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 2 Transaction Pool:</h6>
+                        <pre id="node2-transaction-pool"></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal"><i class="fas fa-times"></i> Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+	    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            if ({{ deployed|default:"false" }}) {
+                $('#contractAddress').text('{{ contract_address }}');
+                $('#successModal').modal('show');
+            }
+        });
+    </script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('networkChart').getContext('2d');
+    let networkChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Number of Transactions',
+                data: [],
+                fill: false,
+                borderColor: 'rgb(75, 192, 192)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    const wsStart = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const endpoint = wsStart + window.location.host + '/ws/blockchain/';
+    const socket = new WebSocket(endpoint);
+
+    socket.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        console.log('Message from WebSocket:', data);
+        if (data.type === 'new_block') {
+            const currentTime = new Date().toLocaleTimeString();
+            networkChart.data.labels.push(currentTime);
+            networkChart.data.datasets.forEach((dataset) => {
+                dataset.data.push(data.block.transactions.length);
+            });
+            networkChart.update();
+        }
+    };
+
+    socket.onopen = function(e) {
+        console.log('WebSocket open', e);
+    };
+
+    socket.onerror = function(e) {
+        console.log('WebSocket error', e);
+    };
+
+    socket.onclose = function(e) {
+        console.log('WebSocket closed', e);
+    };
+
+
+            // Fetch initial network status and display in modal
+            $('#view-network-status-button').click(async function() {
+                const response = await fetch('/network_status/', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}',
+                    },
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('Network status data:', data);
+                    const syncStatus = data.is_synchronized ? "Nodes are synchronized" : "Nodes are not synchronized";
+
+                    $('#sync-status').text(syncStatus);
+                    $('#node1-latest-transaction').text(data.node1_latest_transaction ? JSON.stringify(data.node1_latest_transaction, null, 2) : 'No data');
+                    $('#node1-transaction-pool').text(data.node1_transaction_pool ? JSON.stringify(data.node1_transaction_pool, null, 2) : 'No data');
+                    $('#node2-latest-transaction').text(data.node2_latest_transaction ? JSON.stringify(data.node2_latest_transaction, null, 2) : 'No data');
+                    $('#node2-transaction-pool').text(data.node2_transaction_pool ? JSON.stringify(data.node2_transaction_pool, null, 2) : 'No data');
+
+                    $('#networkStatusModal').modal('show');
+                } else {
+                    alert('Failed to fetch network status');
+                }
+            });
+
+
+    const startMiningButton = document.getElementById('start-mining-button');
+    const stopMiningButton = document.getElementById('stop-mining-button');
+    const hashrateElem = document.getElementById('hashrate');
+    const blocksMinedElem = document.getElementById('blocks-mined');
+    const totalRewardsElem = document.getElementById('total-rewards');
+
+        const startMiningButton = document.getElementById('start-mining-button');
+    const stopMiningButton = document.getElementById('stop-mining-button');
+    const hashrateElem = document.getElementById('hashrate');
+    const blocksMinedElem = document.getElementById('blocks-mined');
+    const totalRewardsElem = document.getElementById('total-rewards');
+
+    async function fetchMiningStats() {
+        const response = await fetch('/get_mining_statistics/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            const data = await response.json();
+            hashrateElem.textContent = data.hashrate.toFixed(2);
+            blocksMinedElem.textContent = data.blocks_mined;
+            totalRewardsElem.textContent = data.total_rewards.toFixed(4);
+        }
+    }
+
+    let miningStatsInterval;
+
+    startMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/start_mining/1/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining started');
+            startMiningButton.style.display = 'none';
+            stopMiningButton.style.display = 'block';
+            miningStatsInterval = setInterval(fetchMiningStats, 5000); // Fetch stats every 5 seconds
+        } else {
+            alert('Failed to start mining');
+        }
+    });
+
+    stopMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/stop_mining/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining stopped');
+            startMiningButton.style.display = 'block';
+            stopMiningButton.style.display = 'none';
+            clearInterval(miningStatsInterval);
+        } else {
+            alert('Failed to stop mining');
+        }
+    });
+
+
+
+    $('#join-pool-form').submit(function(event) {
+        event.preventDefault();
+        const form = $(this);
+        const pool_id = $('#pool_id').val();
+
+        console.log(`Attempting to join pool with ID: ${pool_id}`);
+
+        $.ajax({
+            type: 'POST',
+            url: `/join_pool/${pool_id}/`,
+            data: form.serialize(),
+            success: function(data) {
+                console.log('Join pool success response:', data);
+                alert('Joined pool successfully');
+            },
+            error: function(xhr) {
+                console.log('Join pool error response:', xhr);
+                let errorMessage = 'Error joining pool.';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMessage = xhr.responseJSON.error;
+                }
+                alert(errorMessage);
+            }
+        });
+    });
+
+    let currentPage = 1;
+
+    
+
+
+
+    // WebSocket for transaction updates
+    const transactionSocket = new WebSocket('wss://' + window.location.host + '/ws/transactions/');
+
+    transactionSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Transaction update received:', data);
+
+        const transactionsTableBody = document.getElementById('transactions-table').getElementsByTagName('tbody')[0];
+
+        const row = transactionsTableBody.insertRow(0);  // Insert new row at the beginning
+        row.innerHTML = `
+            <td>${data.hash}</td>
+            <td>${data.sender}</td>
+            <td>${data.receiver}</td>
+            <td>${data.amount}</td>
+            <td>${data.fee}</td>
+            <td>${data.timestamp}</td>
+            <td>${data.is_approved}</td>
+            <td>${data.shard}</td>
+        `;
+    };
+
+    transactionSocket.onopen = function(e) {
+        console.log('Transaction WebSocket open', e);
+    };
+
+    transactionSocket.onerror = function(e) {
+        console.log('Transaction WebSocket error', e);
+    };
+
+    transactionSocket.onclose = function(e) {
+        console.log('Transaction WebSocket closed', e);
+    };
+
+    $('.join-pool-form').submit(function(event) {
+        event.preventDefault();
+        const form = $(this);
+
+        console.log(`Attempting to join pool with action URL: ${form.attr('action')}`);
+
+        $.ajax({
+            type: 'POST',
+            url: form.attr('action'),
+            data: form.serialize(),
+            success: function(data) {
+                console.log('Join pool success response:', data);
+                alert('Joined pool successfully');
+            },
+            error: function(xhr) {
+                console.log('Join pool error response:', xhr);
+                let errorMessage = 'Error joining pool.';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMessage = xhr.responseJSON.error;
+                }
+                alert(errorMessage);
+            }
+        });
+    });
+
+    // WebSocket for pool updates
+    const poolTableBody = document.getElementById('pool-table-body');
+    let poolSocket = new WebSocket('wss://' + window.location.host + '/ws/pools/');
+
+    poolSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Pools WebSocket message received:', data);
+        const pools = data.pools;
+        poolTableBody.innerHTML = '';
+        pools.forEach(pool => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${pool.name}</td>
+                <td>${pool.num_users}</td>
+                <td>${pool.hashrate.toFixed(2)} H/s</td>
+                <td>${pool.rewards}</td>
+                <td>
+                    <form class="join-pool-form" action="/join_pool/${pool.id}/" method="post">
+                        <input type="hidden" name="csrfmiddlewaretoken" value="${csrftoken}">
+                        <button type="submit" class="btn btn-primary">Join Pool</button>
+                    </form>
+                </td>
+            `;
+            poolTableBody.appendChild(row);
+        });
+    };
+
+    poolSocket.onopen = function(e) {
+        console.log('Pool WebSocket open', e);
+    };
+
+    poolSocket.onerror = function(e) {
+        console.log('Pool WebSocket error', e);
+    };
+
+    poolSocket.onclose = function(e) {
+        console.log('Pool WebSocket closed', e);
+        setTimeout(function() {
+            console.log('Reconnecting Pool WebSocket...');
+            poolSocket = new WebSocket('wss://' + window.location.host + '/ws/pools/');
+        }, 1000);
+    };
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    const csrftoken = getCookie('csrftoken');
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('search-button').addEventListener('click', async function() {
+        const searchInput = document.getElementById('search-input').value.trim();
+        if (searchInput === '') {
+            alert('Please enter a transaction hash or wallet address to search.');
+            return;
+        }
+
+        const searchParams = new URLSearchParams();
+        searchParams.append('address', searchInput);
+
+        if (searchInput.length === 64) { // Assuming the hash length is 64 characters
+            searchParams.append('hash', searchInput);
+        }
+
+        try {
+            const response = await fetch(`/search_transaction/?${searchParams.toString()}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    if (data.hash) {
+                        alert(`Transaction found: ${JSON.stringify(data, null, 2)}`);
+                    } else if (data.address && data.abi) {
+                        alert(`Contract found: Address: ${data.address}, ABI: ${JSON.stringify(data.abi)}`);
+                    } else if (data.address) {
+                        alert(`Wallet found: ${JSON.stringify(data, null, 2)}`);
+                    } else {
+                        alert('No valid data found.');
+                    }
+                }
+            } else {
+                const errorText = await response.text();
+                alert(`Failed to fetch details. Status: ${response.status}, Message: ${errorText}`);
+            }
+        } catch (error) {
+            alert(`An error occurred while fetching details: ${error}`);
+        }
+    });
+});
+
+var syncStatusSocket = new WebSocket('wss://' + window.location.host + '/ws/sync_status/');
+
+syncStatusSocket.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    console.log('Synchronization Status:', data);
+    // Update your UI based on the synchronization status
+};
+
+syncStatusSocket.onclose = function(e) {
+    console.error('WebSocket closed unexpectedly');
+};
+</script>
+            <script>document.addEventListener('DOMContentLoaded', function() {
+    const deployContractForm = document.getElementById('deploy-contract-form');
+
+    if (deployContractForm) {
+        deployContractForm.addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const tokenName = document.getElementById('name').value;
+            const tokenSymbol = document.getElementById('symbol').value;
+            const initialSupply = document.getElementById('initialSupply').value;
+            const network = document.getElementById('network').value;
+
+            console.log("Form submitted with values:", { tokenName, tokenSymbol, initialSupply, network });
+
+            if (!tokenName || !tokenSymbol || !initialSupply || !network) {
+                alert('All fields are required.');
+                return;
+            }
+
+            // Convert initialSupply to the correct format (multiply by 10^18 for 18 decimals)
+            const decimals = 18;
+            const formattedInitialSupply = BigInt(initialSupply) * BigInt(10 ** decimals);
+
+            // Show the modal
+            $('#deployModal').modal('show');
+
+            // Fetch the compiled contract details and private key from the backend
+            const response = await fetch('{% url "deploy_contract" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}',
+                },
+                body: JSON.stringify({
+                    name: tokenName,
+                    symbol: tokenSymbol,
+                    initialSupply: formattedInitialSupply.toString(), // Pass as a string
+                    network: network
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                const { transactionHash, contractAddress, abi, bytecode, privateKey, message } = data; // Ensure privateKey is included
+
+                console.log("Received response from backend:", data);
+
+                document.getElementById('transactionHash').innerText = transactionHash;
+                document.getElementById('contractAddress').innerText = contractAddress;
+                document.getElementById('modalTitle').innerText = 'Contract deployed successfully.';
+                document.getElementById('spinner').style.display = 'none';
+
+                const web3 = new Web3(new Web3.providers.HttpProvider('https://polygon-rpc.com')); // Change to your node URL
+
+                try {
+                    // Remove the part where it gets accounts from web3
+
+                    const contract = new web3.eth.Contract(abi);
+                    const deploy = contract.deploy({
+                        data: bytecode,
+                        arguments: [tokenName, tokenSymbol, formattedInitialSupply.toString()] // Ensure it is a string
+                    });
+
+                    const gas = await deploy.estimateGas();
+                    console.log("Estimated gas:", gas);
+
+                    const gasPrice = await web3.eth.getGasPrice();
+                    console.log("Current gas price:", gasPrice);
+
+                    const transactionParameters = {
+                        from: web3.eth.accounts.privateKeyToAccount(privateKey).address,
+                        data: deploy.encodeABI(),
+                        gas: web3.utils.toHex(gas),
+                        gasPrice: web3.utils.toHex(gasPrice),
+                        chainId: await web3.eth.getChainId()
+                    };
+
+                    const signedTransaction = await web3.eth.accounts.signTransaction(transactionParameters, privateKey);
+
+                    console.log("Signed transaction:", signedTransaction);
+
+                    const txReceipt = await web3.eth.sendSignedTransaction(signedTransaction.rawTransaction);
+                    console.log("Transaction receipt:", txReceipt);
+
+                    if (txReceipt.contractAddress) {
+                        document.getElementById('transactionHash').innerText = txReceipt.transactionHash;
+                        document.getElementById('contractAddress').innerText = txReceipt.contractAddress;
+                        document.getElementById('spinner').style.display = 'none';
+                    }
+
+                } catch (error) {
+                    console.error("Failed to deploy contract:", error);
+                    alert(`Failed to execute a function inside the smart contract: ${error.message}`);
+                    // Leave the modal visible but indicate there was an error
+                    document.getElementById('spinner').style.display = 'none';
+                }
+            } else {
+                console.error("Error response from backend:", data);
+                alert(`Error: ${data.error}`);
+                // Hide the modal in case of error
+                $('#deployModal').modal('hide');
+            }
+        });
+    }
+});
+
+
+
+
+
+    </script>
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script>
+$(document).ready(function() {
+    let currentPage = 1;
+
+    $('#searchQuery').on('input', function() {
+        var query = $(this).val().trim();
+        $('#loadingSpinner').show();
+
+        if (query) {
+            $.ajax({
+                url: '/search_transaction/',
+                method: 'GET',
+                data: { query: query },
+                success: function(response) {
+                    var resultsDropdown = $('#searchResultsDropdown');
+                    var resultsList = resultsDropdown.find('ul');
+
+                    resultsList.empty();
+
+                    if (response.results && response.results.length) {
+                        response.results.forEach(function(result) {
+                            var listItem;
+                            if (result.hash) {
+                                listItem = $('<li></li>').html(`<strong>Hash:</strong> ${result.hash}`);
+                            } else if (result.address) {
+                                listItem = $('<li></li>').html(`<strong>Address:</strong> ${result.address} <strong>Balance:</strong> ${result.balance}`);
+                            } else {
+                                listItem = $('<li></li>').text('No results found');
+                            }
+                            listItem.data('result', result); // Attach result data to the list item
+                            resultsList.append(listItem);
+                        });
+                        resultsDropdown.show();
+                    } else {
+                        resultsList.append('<li>No results found</li>');
+                        resultsDropdown.show();
+                    }
+                    $('#loadingSpinner').hide();
+                },
+                error: function() {
+                    $('#searchResultsDropdown ul').empty().append('<li>Error fetching results</li>');
+                    $('#searchResultsDropdown').show();
+                    $('#loadingSpinner').hide();
+                }
+            });
+        } else {
+            $('#searchResultsDropdown').hide();
+            $('#loadingSpinner').hide();
+        }
+    });
+
+    $(document).on('click', '#searchResultsDropdown li', function() {
+        var selectedResult = $(this).data('result');
+        if (selectedResult) {
+            $('#searchResultsContent').html(generateResultsHtml({ results: [selectedResult] }));
+            $('#searchResultsModal').modal('show');
+        }
+        $('#searchResultsDropdown').hide();
+    });
+
+    $(document).click(function(event) {
+        if (!$(event.target).closest('.search-bar').length) {
+            $('#searchResultsDropdown').hide();
+        }
+    });
+
+    $('#searchForm').submit(function(event) {
+        event.preventDefault();
+        currentPage = 1;
+        fetchSearchResults();
+    });
+
+    $('#prevPage').click(function() {
+        if (currentPage > 1) {
+            currentPage--;
+            fetchSearchResults();
+        }
+    });
+
+    $('#nextPage').click(function() {
+        currentPage++;
+        fetchSearchResults();
+    });
+
+    function fetchSearchResults() {
+        const query = $('#searchQuery').val().trim();
+        if (!query) {
+            alert('Please enter a valid query.');
+            return;
+        }
+
+        $('#loadingSpinner').show();
+
+        $.ajax({
+            url: '/search_transaction/',
+            method: 'GET',
+            data: { query: query, page: currentPage },
+            success: function(response) {
+                $('#searchResultsContent').html(generateResultsHtml(response));
+                $('#searchResultsModal').modal('show');
+                $('#loadingSpinner').hide();
+
+                $('#prevPage').prop('disabled', !response.has_previous);
+                $('#nextPage').prop('disabled', !response.has_next);
+            },
+            error: function() {
+                $('#searchResultsContent').html('<div class="alert alert-danger">An error occurred while fetching results.</div>');
+                $('#searchResultsModal').modal('show');
+                $('#loadingSpinner').hide();
+            }
+        });
+    }
+
+    function generateResultsHtml(data) {
+    if (data.error) {
+        return '<div class="alert alert-danger">' + data.error + '</div>';
+    }
+
+    let html = '<ul class="list-group">';
+    if (data.results && data.results.length) {
+        data.results.forEach(result => {
+            if (result.hash) {
+                html += `<li class="list-group-item"><strong>Transaction Hash:</strong> ${result.hash}</li>`;
+                html += `<li class="list-group-item"><strong>Sender:</strong> ${result.sender}</li>`;
+                html += `<li class="list-group-item"><strong>Receiver:</strong> ${result.receiver}</li>`;
+                html += `<li class="list-group-item"><strong>Amount:</strong> ${result.amount}</li>`;
+                html += `<li class="list-group-item"><strong>Fee:</strong> ${result.fee}</li>`;
+                html += `<li class="list-group-item"><strong>Timestamp:</strong> ${result.timestamp}</li>`;
+                html += `<li class="list-group-item"><strong>Is Approved:</strong> ${result.is_approved}</li>`;
+                html += `<li class="list-group-item"><strong>Shard:</strong> ${result.shard}</li>`;
+            } else if (result.address) {
+                html += `<li class="list-group-item"><strong>Address:</strong> ${result.address}</li>`;
+                html += `<li class="list-group-item"><strong>Balance:</strong> ${result.balance}</li>`;
+                if (result.transactions_sent && result.transactions_sent.length > 0) {
+                    html += '<li class="list-group-item"><strong>Transactions Sent:</strong><ul>';
+                    result.transactions_sent.forEach(tx => {
+                        html += `<li>Hash: ${tx.hash}, Receiver: ${tx.receiver}, Amount: ${tx.amount}, Fee: ${tx.fee}, Timestamp: ${tx.timestamp}, Is Approved: ${tx.is_approved}, Shard: ${tx.shard}</li>`;
+                    });
+                    html += '</ul></li>';
+                }
+                if (result.transactions_received && result.transactions_received.length > 0) {
+                    html += '<li class="list-group-item"><strong>Transactions Received:</strong><table class="transactions-table"><thead><tr><th>Hash</th><th>Sender</th><th>Amount</th><th>Fee</th><th>Timestamp</th><th>Is Approved</th><th>Shard</th></tr></thead><tbody>';
+                    result.transactions_received.forEach(tx => {
+                        html += `<tr><td>${tx.hash}</td><td>${tx.sender}</td><td>${tx.amount}</td><td>${tx.fee}</td><td>${tx.timestamp}</td><td>${tx.is_approved}</td><td>${tx.shard}</td></tr>`;
+                    });
+                    html += '</tbody></table></li>';
+                }
+                if (result.custom_tokens && result.custom_tokens.length > 0) {
+                    html += '<li class="list-group-item"><strong>Custom Tokens:</strong><ul>';
+                    result.custom_tokens.forEach(token => {
+                        html += `<li>Name: ${token.name}, Symbol: ${token.symbol}, Balance: ${token.balance}, Total Supply: ${token.total_supply}</li>`;
+                    });
+                    html += '</ul></li>';
+                }
+            } else if (result.contract) {
+                html += `<li class="list-group-item"><strong>Contract Address:</strong> ${result.address}</li>`;
+                html += `<li class="list-group-item"><strong>ABI:</strong> ${JSON.stringify(result.abi)}</li>`;
+                html += `<li class="list-group-item"><strong>Created At:</strong> ${result.created_at}</li>`;
+                html += `<li class="list-group-item"><strong>Updated At:</strong> ${result.updated_at}</li>`;
+            } else {
+                html += '<li class="list-group-item">No results found</li>';
+            }
+        });
+    } else {
+        html += '<li class="list-group-item">No results found</li>';
+    }
+    html += '</ul>';
+    return html;
+}
+
+});
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script>
+    var ctx = document.getElementById('dagChart').getContext('2d');
+    var dagChart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+            datasets: [{
+                label: 'DAG Nodes',
+                data: [], // Will be filled with data
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                borderColor: 'rgba(75, 192, 192, 1)'
+            }]
+        },
+        options: {
+            scales: {
+                x: {
+                    type: 'linear',
+                    position: 'bottom'
+                }
+            }
+        }
+    });
+
+        var socket = new WebSocket('wss://app.cashewstable.com/ws/dag/');
+    socket.onopen = function() {
+        console.log("WebSocket connection established");
+    };
+    socket.onmessage = function(event) {
+        console.log("WebSocket message received:", event.data);
+        var dagData = JSON.parse(event.data).dag;
+        dagChart.data.datasets[0].data = dagData;
+        dagChart.update();
+    };
+    socket.onerror = function(error) {
+        console.error("WebSocket error observed:", error);
+    };
+    socket.onclose = function(event) {
+        console.log("WebSocket connection closed:", event);
+    };
+
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Network Chart setup
+    const ctxNetwork = document.getElementById('networkChart').getContext('2d');
+    let networkChart = new Chart(ctxNetwork, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Number of Transactions',
+                data: [],
+                fill: false,
+                borderColor: 'rgb(75, 192, 192)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // DAG Chart setup
+    const ctxDag = document.getElementById('dagChart').getContext('2d');
+    let dagChart = new Chart(ctxDag, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Number of DAG Nodes',
+                data: [],
+                fill: false,
+                borderColor: 'rgba(75, 192, 192, 1)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // Function to fetch and update transaction data
+    async function fetchTransactionData() {
+        try {
+            const response = await fetch('/get_transaction_data/');
+            const data = await response.json();
+            const currentTime = new Date().toLocaleTimeString();
+            networkChart.data.labels.push(currentTime);
+            networkChart.data.datasets.forEach((dataset) => {
+                dataset.data.push(data.transactions);
+            });
+            networkChart.update();
+        } catch (error) {
+            console.error('Error fetching transaction data:', error);
+        }
+    }
+
+    // Function to fetch and update node datas
+    async function fetchNodeData() {
+        try {
+            const response = await fetch('/get_node_data/');
+            const data = await response.json();
+            const currentTime = new Date().toLocaleTimeString();
+            dagChart.data.labels.push(currentTime);
+            dagChart.data.datasets.forEach((dataset) => {
+                dataset.data.push(data.nodes);
+            });
+            dagChart.update();
+        } catch (error) {
+            console.error('Error fetching node data:', error);
+        }
+    }
+
+    // Fetch data initially and then periodically
+    fetchTransactionData();
+    fetchNodeData();
+    setInterval(fetchTransactionData, 5000);  // Fetch transaction data every 5 seconds
+    setInterval(fetchNodeData, 5000);  // Fetch node data every 5 seconds
+});
+</script>
+  <script>$(document).ready(function() {
+    // Initialize web3
+    if (typeof web3 !== 'undefined') {
+        web3 = new Web3(web3.currentProvider);
+    } else {
+        web3 = new Web3(new Web3.providers.HttpProvider('https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'));
+    }
+
+    // Function to fetch token symbol
+    async function fetchTokenSymbol(tokenAddress) {
+        if (!web3.utils.isAddress(tokenAddress)) {
+            alert('Invalid contract address');
+            return;
+        }
+
+        // ERC20 Token ABI (simplified)
+        const tokenAbi = [
+            {
+                "constant": true,
+                "inputs": [],
+                "name": "symbol",
+                "outputs": [
+                    {
+                        "name": "",
+                        "type": "string"
+                    }
+                ],
+                "payable": false,
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ];
+
+        const tokenContract = new web3.eth.Contract(tokenAbi, tokenAddress);
+
+        try {
+            const symbol = await tokenContract.methods.symbol().call();
+            $('#tokenSymbol').val(symbol);
+        } catch (error) {
+            alert('Failed to fetch token symbol: ' + error.message);
+        }
+    }
+
+    // Event listener for pasting into the token address field
+    $('#tokenAddress').on('paste', function(event) {
+        setTimeout(() => {
+            const tokenAddress = $('#tokenAddress').val();
+            fetchTokenSymbol(tokenAddress);
+        }, 100); // Delay to ensure the pasted value is available
+    });
+
+    $('#import-token-form').submit(function(event) {
+        event.preventDefault(); // Prevent the default form submission
+
+        // Serialize the form data
+        var formData = $(this).serializeArray();
+
+        // Send the form data via AJAX
+        $.ajax({
+            type: 'POST',
+            url: '{% url "import_token" %}', // Adjust the URL to your view
+            data: $.param(formData),
+            success: function(response) {
+                // Handle success response
+                alert('Token imported successfully!');
+                $('#importTokenModal').modal('hide');
+                // Optionally, update the UI with the new token data
+            },
+            error: function(xhr, status, error) {
+                // Handle error response
+                alert('Failed to import token: ' + xhr.responseText);
+            }
+        });
+    });
+
+    function getCookie(name) {
+        var cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            var cookies = document.cookie.split(';');
+            for (var i = 0; i < cookies.length; i++) {
+                var cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    var csrftoken = getCookie('csrftoken');
+
+    $.ajaxSetup({
+        beforeSend: function(xhr, settings) {
+            if (!/^GET|HEAD|OPTIONS|TRACE$/i.test(settings.type) && !this.crossDomain) {
+                xhr.setRequestHeader("X-CSRFToken", csrftoken);
+            }
+        }
+    });
+});
+
+    </script>
+<script>
+   $(document).ready(function() {
+    // Ensure walletAddress is globally available
+    var walletAddress = '{{ wallet_address|default:"" }}';
+
+    // Populate the wallet details
+    $('#wallet-alias').text('{{ wallet.alias }}');
+    $('#wallet-address').text('{{ wallet.address }}');
+    $('#wallet-public-key').text('{{ wallet.public_key }}');
+    $('#wallet-private-key').text('{{ wallet.private_key }}');
+    $('#wallet-balance').text('{{ wallet.balance }}');
+
+    // Populate custom tokens table
+    var tokens = {{ tokens|safe }};
+    tokens.forEach(function(token) {
+        var row = '<tr>' +
+            '<td>' + token.name + '</td>' +
+            '<td>' + token.symbol + '</td>' +
+            '<td>' + token.balance + '</td>' +
+            '<td>' +
+                '<button class="btn btn-primary token-action-btn" data-action="send" data-token-address="' + token.address + '">Send</button>' +
+                '<button class="btn btn-secondary token-action-btn" data-action="receive" data-token-address="' + token.address + '">Receive</button>' +
+                '<button class="btn btn-danger token-action-btn" data-action="burn" data-token-address="' + token.address + '">Burn</button>' +
+                '<button class="btn btn-success token-action-btn" data-action="mint" data-token-address="' + token.address + '">Mint</button>' +
+            '</td>' +
+        '</tr>';
+        $('#tokens-table tbody').append(row);
+    });
+
+    // Attach click event to token action buttons
+    $('#tokens-table').on('click', '.token-action-btn', function() {
+        var actionType = $(this).data('action');
+        var tokenAddress = $(this).data('token-address');
+        $('#action-type').val(actionType);
+        $('#token-address').val(tokenAddress);
+        $('#tokenActionModalLabel').text(actionType.charAt(0).toUpperCase() + actionType.slice(1));
+        
+        // Show recipient address input only for send and mint actions
+        if (actionType === 'send' || actionType === 'mint') {
+            $('#recipient-address-group').show();
+        } else {
+            $('#recipient-address-group').hide();
+        }
+        
+        $('#tokenActionModal').modal('show');
+    });
+
+    // Handle form submission
+    $('#token-action-form').submit(function(event) {
+        event.preventDefault();
+        var formData = $(this).serializeArray();
+        
+        // Add the wallet address to the form data
+        formData.push({ name: 'walletAddress', value: walletAddress });
+
+        $.ajax({
+            type: 'POST',
+            url: '/token_action/', // Adjust the URL to your view
+            data: $.param(formData),
+            success: function(response) {
+                alert(response.message);
+                $('#tokenActionModal').modal('hide');
+                // Optionally, update the UI with the new token data
+            },
+            error: function(xhr, status, error) {
+                alert('Failed to perform token action: ' + xhr.responseText);
+            }
+        });
+    });
+});
+
+    </script>          <script>
+    $(document).ready(function() {
+    async function fetchWalletDetails(page) {
+        console.log('Fetching wallet details for page:', page);
+        const response = await fetch(`/get_wallet_details/?page=${page}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Wallet details fetched:', data);
+
+            $('#wallet-alias').text(data.alias || 'N/A');
+            $('#wallet-address').text(data.address || 'N/A');
+            $('#wallet-public-key').text(data.public_key || 'N/A');
+            $('#wallet-private-key').text(data.private_key || 'N/A');
+            $('#wallet-balance').text(data.balance);
+
+            console.log('Custom tokens data:', data.custom_tokens);
+
+            let tokensTable = '';
+            if (data.custom_tokens && data.custom_tokens.length > 0) {
+                data.custom_tokens.forEach(token => {
+                    console.log('Token data:', token);
+                    tokensTable += `
+                        <tr>
+                            <td>${token.name || 'N/A'}</td>
+                            <td>${token.symbol}</td>
+                            <td>${token.balance}</td>
+                            <td>${token.address}</td>
+                            <td>
+                                <button class="btn btn-primary token-action-btn" data-action="send" data-token-address="${token.address}">Send</button>
+                                <button class="btn btn-secondary token-action-btn" data-action="receive" data-token-address="${token.address}">Receive</button>
+                                <button class="btn btn-danger token-action-btn" data-action="burn" data-token-address="${token.address}">Burn</button>
+                                <button class="btn btn-success token-action-btn" data-action="mint" data-token-address="${token.address}">Mint</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            } else {
+                tokensTable = '<tr><td colspan="5">No custom tokens available</td></tr>';
+            }
+            $('#tokens-table tbody').html(tokensTable);
+
+            let transactionsTable = '';
+            if (data.transactions && data.transactions.length > 0) {
+                data.transactions.forEach(tx => {
+                    transactionsTable += `
+                        <tr>
+                            <td>${tx.hash}</td>
+                            <td>${tx.sender}</td>
+                            <td>${tx.receiver}</td>
+                            <td>${tx.amount}</td>
+                            <td>${tx.fee}</td>
+                            <td>${tx.timestamp}</td>
+                            <td>${tx.is_approved}</td>
+                            <td>${tx.shard}</td>
+                        </tr>
+                    `;
+                });
+            } else {
+                transactionsTable = '<tr><td colspan="8">No transactions available</td></tr>';
+            }
+            $('#transactions-table tbody').html(transactionsTable);
+
+            let paginationControls = `
+                <button ${data.current_page === 1 ? 'disabled' : ''} id="prev-page" class="btn btn-primary">Previous</button>
+                <span>Page ${data.current_page} of ${data.total_pages}</span>
+                <button ${data.current_page === data.total_pages ? 'disabled' : ''} id="next-page" class="btn btn-primary">Next</button>
+            `;
+            $('#pagination-controls').html(paginationControls);
+
+            $('#prev-page').click(function() {
+                if (data.current_page > 1) {
+                    fetchWalletDetails(data.current_page - 1);
+                }
+            });
+
+            $('#next-page').click(function() {
+                if (data.current_page < data.total_pages) {
+                    fetchWalletDetails(data.current_page + 1);
+                }
+            });
+
+            $('#walletModal').modal('show');
+        } else {
+            alert('Failed to fetch wallet details');
+        }
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    $('#view-wallet-details-button').click(function() {
+        console.log('View Wallet Details button clicked');
+        fetchWalletDetails(1); // Reset to first page
+    });
+
+    async function fetchTokenDetails(tokenAddress) {
+        try {
+            const response = await fetch(`/fetch_token_details/?address=${tokenAddress}`);
+            if (response.ok) {
+                return await response.json();
+            } else {
+                console.error('Failed to fetch token details');
+                return null;
+            }
+        } catch (error) {
+            console.error('Error fetching token details:', error);
+            return null;
+        }
+    }
+
+    $('#tokenAddress').on('blur', async function() {
+        const tokenAddress = $(this).val();
+        if (tokenAddress) {
+            const tokenDetails = await fetchTokenDetails(tokenAddress);
+            if (tokenDetails) {
+                $('#tokenName').val(tokenDetails.name);
+                $('#tokenSymbol').val(tokenDetails.symbol);
+                $('#initialSupply').val(tokenDetails.initial_supply / 10**18); // Convert to human-readable format
+            } else {
+                alert('Failed to fetch token details');
+            }
+        }
+    });
+
+    $(document).on('click', '.token-action-btn', function() {
+        const action = $(this).data('action');
+        const tokenAddress = $(this).data('token-address');
+        if (action === 'send') {
+            $('#sendTokenModal').modal('show');
+            $('#send-token-address').val(tokenAddress);
+        } else if (action === 'burn') {
+            $('#burnTokenModal').modal('show');
+            $('#burn-token-address').val(tokenAddress);
+        } else if (action === 'mint') {
+            $('#mintTokenModal').modal('show');
+            $('#mint-token-address').val(tokenAddress);
+        } else {
+            alert(`Action: ${action}, Token Address: ${tokenAddress}`);
+        }
+    });
+
+    $('#send-token-form').submit(async function(event) {
+        event.preventDefault();
+
+        const recipient = $('#send-recipient').val();
+        const amount = $('#send-amount').val();
+        const tokenAddress = $('#send-token-address').val();
+
+        const csrfToken = getCookie('csrftoken');
+
+        try {
+            const response = await fetch('/send_token/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: JSON.stringify({
+                    recipient: recipient,
+                    amount: amount,
+                    tokenAddress: tokenAddress,
+                }),
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                $('#sendTokenModal').modal('hide');
+                $('#transactionDetailsModal').modal('show');
+                $('#transaction-hash').text(result.txn_hash);
+            } else {
+                alert(`Failed to send token: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error sending token:', error);
+            alert('An error occurred while sending the token.');
+        }
+    });
+
+    $('#burn-token-form').submit(async function(event) {
+        event.preventDefault();
+
+        const amount = $('#burn-amount').val();
+        const tokenAddress = $('#burn-token-address').val();
+
+        const csrfToken = getCookie('csrftoken');
+
+        try {
+            const response = await fetch('/burn_token/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: JSON.stringify({
+                    amount: amount,
+                    tokenAddress: tokenAddress,
+                }),
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                $('#burnTokenModal').modal('hide');
+                $('#transactionDetailsModal').modal('show');
+                $('#transaction-hash').text(result.txn_hash);
+            } else {
+                alert(`Failed to burn token: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error burning token:', error);
+            alert('An error occurred while burning the token.');
+        }
+    });
+
+    $('#mint-token-form').submit(async function(event) {
+        event.preventDefault();
+
+        const amount = $('#mint-amount').val();
+        const tokenAddress = $('#mint-token-address').val();
+
+        const csrfToken = getCookie('csrftoken');
+
+        try {
+            const response = await fetch('/mint_token/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: JSON.stringify({
+                    amount: amount,
+                    tokenAddress: tokenAddress,
+                }),
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                $('#mintTokenModal').modal('hide');
+                $('#transactionDetailsModal').modal('show');
+                $('#transaction-hash').text(result.txn_hash);
+            } else {
+                alert(`Failed to mint token: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error minting token:', error);
+            alert('An error occurred while minting the token.');
+        }
+    });
+});
+
+
+
+
+    </script>
+
+
+
+   <script>
+                    $(document).ready(function() {
+            $('#create-wallet-form').submit(function(event) {
+                event.preventDefault();
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).attr('action'),
+                    data: $(this).serialize(),
+                    success: function(response) {
+                        if (response.message) {
+                            $('#newWalletAddress').text(response.address);
+                            $('#newWalletPrivateKey').text(response.public_key);
+                            $('#newWalletMnemonic').text(response.mnemonic);
+                            $('#newWalletBalance').text(response.balance);
+                            $('#newWalletModal').modal('show');
+                        } else {
+                            alert('Error creating wallet: ' + response.error);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        alert('An error occurred while creating the wallet: ' + error);
+                    }
+                });
+            });
+
+            $('#addToMetaMask').click(function() {
+                const privateKey = $('#newWalletPrivateKey').text();
+                alert(`To add this wallet to MetaMask, follow these steps:
+1. Open MetaMask and go to the 'Import Account' section.
+2. Select 'Private Key' as the import method.
+3. Copy and paste the following private key: ${privateKey}`);
+
+                // Optionally, you can automatically copy the private key to the clipboard
+                navigator.clipboard.writeText(privateKey).then(function() {
+                    console.log('Private key copied to clipboard');
+                }, function(err) {
+                    console.error('Could not copy text: ', err);
+                });
+            });
+        });
+
+    </script><script>
+document.getElementById('unique-create-pool-form').addEventListener('submit', async function(event) {
+    event.preventDefault();
+
+    const token1Address = document.getElementById('unique-token1Address').value;
+    const token1Amount = document.getElementById('unique-token1Amount').value;
+    const token2Address = document.getElementById('unique-token2Address').value;
+    const token2Amount = document.getElementById('unique-token2Amount').value;
+    const useNativeCoin = document.getElementById('unique-useNativeCoin').checked;
+
+    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+    try {
+        const response = await fetch('/create_pool/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify({
+                token1Address: token1Address,
+                token1Amount: token1Amount,
+                token2Address: token2Address,
+                token2Amount: token2Amount,
+                useNativeCoin: useNativeCoin
+            }),
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            document.getElementById('txnHash').innerText = result.txn_hash;
+            document.getElementById('contractAddress').innerText = result.router_address;
+            $('#liquidityPoolSuccessModal').modal('show');
+        } else {
+            alert(`Failed to create liquidity pool: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('Error creating liquidity pool:', error);
+        alert('An error occurred while creating the liquidity pool.');
+    }
+});
+</script>
+
+
+<script>
+    // Initialize charts when modals are shown
+    $('#networkChartModal').on('shown.bs.modal', function () {
+        const ctxNetwork = document.getElementById('networkChartCanvas').getContext('2d');
+        new Chart(ctxNetwork, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Number of Transactions',
+                    data: [],
+                    fill: false,
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    });
+
+    $('#dagChartModal').on('shown.bs.modal', function () {
+        const ctxDag = document.getElementById('dagChartCanvas').getContext('2d');
+        new Chart(ctxDag, {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'DAG Nodes',
+                    data: [], // Will be filled with data
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgba(75, 192, 192, 1)'
+                }]
+            },
+            options: {
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    });
+</script>
+<script>
+$(document).ready(function() {
+    $('#searchQuery').on('input', function() {
+        var query = $(this).val().trim();
+
+        if (query) {
+            $.ajax({
+                url: '/search_transaction/',
+                method: 'GET',
+                data: { query: query },
+                success: function(response) {
+                    var resultsDropdown = $('#searchResultsDropdown');
+                    var resultsList = resultsDropdown.find('ul');
+
+                    resultsList.empty();
+
+                    if (response.length) {
+                        response.forEach(function(result) {
+                            var listItem = $('<li></li>').text(result);
+                            resultsList.append(listItem);
+                        });
+                        resultsDropdown.show();
+                    } else {
+                        resultsList.append('<li>No results found</li>');
+                        resultsDropdown.show();
+                    }
+                },
+                error: function() {
+                    $('#searchResultsDropdown ul').empty().append('<li>Error fetching results</li>');
+                    $('#searchResultsDropdown').show();
+                }
+            });
+        } else {
+            $('#searchResultsDropdown').hide();
+        }
+    });
+
+    $(document).on('click', '#searchResultsDropdown li', function() {
+        var selectedText = $(this).text();
+        $('#searchQuery').val(selectedText);
+        $('#searchResultsDropdown').hide();
+    });
+
+    $(document).click(function(event) {
+        if (!$(event.target).closest('.search-bar').length) {
+            $('#searchResultsDropdown').hide();
+        }
+    });
+});
+</script><script>
+document.addEventListener('DOMContentLoaded', function() {
+    const startMiningButton = document.getElementById('start-mining-button');
+    const stopMiningButton = document.getElementById('stop-mining-button');
+    const hashrateElem = document.getElementById('hashrate');
+    const blocksMinedElem = document.getElementById('blocks-mined');
+    const totalRewardsElem = document.getElementById('total-rewards');
+
+    async function fetchMiningStats() {
+        const response = await fetch('/get_mining_statistics/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            const data = await response.json();
+            hashrateElem.textContent = data.hashrate.toFixed(2);
+            blocksMinedElem.textContent = data.blocks_mined;
+            totalRewardsElem.textContent = data.total_rewards.toFixed(4);
+        }
+    }
+
+    let miningStatsInterval;
+
+    startMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/start_mining/1/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining started');
+            startMiningButton.style.display = 'none';
+            stopMiningButton.style.display = 'block';
+            miningStatsInterval = setInterval(fetchMiningStats, 5000); // Fetch stats every 5 seconds
+        } else {
+            alert('Failed to start mining');
+        }
+    });
+
+    stopMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/stop_mining/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining stopped');
+            startMiningButton.style.display = 'block';
+            stopMiningButton.style.display = 'none';
+            clearInterval(miningStatsInterval);
+        } else {
+            alert('Failed to stop mining');
+        }
+    });
+});
+</script>       <script>
+        $(document).ready(function() {
+            $('#transaction-form').on('submit', function(event) {
+                event.preventDefault();
+                var startTime = performance.now();
+                
+                $.ajax({
+                    url: "{% url 'dashboard' %}",
+                    method: 'POST',
+                    data: $(this).serialize() + "&create_transaction=1",
+                    success: function(response) {
+                        var endTime = performance.now();
+                        var approvalTime = ((endTime - startTime) / 1000).toFixed(2);
+
+                        $('#modalMessage').text(response.message);
+                        $('#transactionHash').text(response.transaction_hash);
+                        $('#approvalTime').text(approvalTime);
+                        $('#transactionModal').modal('show');
+                    },
+                    error: function(response) {
+                        alert('Error: ' + response.responseJSON.error);
+                    }
+                });
+            });
+        });
+    </script>
+
+
+
+    </body>
+</html>
+
+{% endblock %}

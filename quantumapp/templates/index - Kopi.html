@@ -1,0 +1,1192 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DagKnight Blockchain Dashboard</title>
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        .modal-content {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+        }
+        .modal-header {
+            border-bottom: none;
+        }
+        .modal-body p {
+            background-color: #ffffff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .modal-body pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        .sync-status {
+            font-weight: bold;
+            color: green;
+        }
+        .sync-status.error {
+            color: red;
+        }
+        .search-bar {
+            width: 100%;
+            padding: 15px;
+            background-color: #f1f1f1;
+            margin-bottom: 20px;
+        }
+        .search-bar input[type="text"] {
+            width: 80%;
+            padding: 10px;
+            margin-right: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .search-bar button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+    </style>    <style>
+        body {
+            display: flex;
+        }
+        .sidebar {
+            width: 250px;
+            height: 100vh;
+            background-color: #343a40;
+            padding: 20px;
+            position: fixed;
+        }
+        .sidebar ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .sidebar ul li {
+            margin: 20px 0;
+        }
+        .sidebar ul li a {
+            color: white;
+            text-decoration: none;
+            font-size: 18px;
+            display: block;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .sidebar ul li a:hover {
+            background-color: #495057;
+        }
+        .content {
+            margin-left: 270px;
+            padding: 20px;
+            width: 100%;
+        }
+		/* Sidebar Styles */
+.sidebar {
+    height: 100%;
+    width: 250px;
+    position: fixed;
+    z-index: 1;
+    top: 0;
+    left: 0;
+    background-color: #111;
+    overflow-x: hidden;
+    transition: 0.5s;
+    padding-top: 60px;
+}
+
+.sidebar a {
+    padding: 10px 15px;
+    text-decoration: none;
+    font-size: 18px;
+    color: #818181;
+    display: block;
+    transition: 0.3s;
+}
+
+.sidebar a:hover {
+    color: #f1f1f1;
+}
+
+.sidebar .closebtn {
+    position: absolute;
+    top: 0;
+    right: 25px;
+    font-size: 36px;
+    margin-left: 50px;
+}
+
+.openbtn {
+    font-size: 20px;
+    cursor: pointer;
+    background-color: #111;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+}
+
+.openbtn:hover {
+    background-color: #444;
+}
+
+/* Main content */
+#main {
+    transition: margin-left .5s;
+    padding: 16px;
+}
+
+/* When the sidebar is expanded */
+.sidebar-expanded {
+    width: 250px;
+}
+
+/* When the sidebar is collapsed */
+.sidebar-collapsed {
+    width: 0;
+    display: none;
+}
+
+/* Menu icon when sidebar is collapsed */
+#menu-icon {
+    display: block;
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    font-size: 30px;
+    color: #111;
+    cursor: pointer;
+}
+
+@media screen and (max-height: 450px) {
+    .sidebar {padding-top: 15px;}
+    .sidebar a {font-size: 18px;}
+}
+
+    </style>
+
+</head>
+<body>
+    <div class="sidebar" id="mySidebar">
+        <a href="javascript:void(0)" class="closebtn" onclick="closeNav()">&times;</a>
+        <h2>Menu</h2>
+        <ul>
+            <li><a href="{% url 'dashboard' %}"><i class="fas fa-home"></i> Dashboard</a></li>
+            <li><a href="{% url 'market' %}"><i class="fas fa-chart-line"></i> Market</a></li>
+            <li><a href="{% url 'trading_bot' %}"><i class="fas fa-robot"></i> Trading Bot</a></li>
+        </ul>
+    </div>
+ <div class="content">
+
+    <header>
+        <h1><i class="fas fa-coins"></i> Welcome to DagKnight Blockchain</h1>
+        <nav>
+            <ul>
+                <li><a href="#network-status"><i class="fas fa-network-wired"></i> Network Status</a></li>
+                <li><a href="#create-transaction"><i class="fas fa-exchange-alt"></i> Create Transaction</a></li>
+                <li><a href="#create-wallet"><i class="fas fa-wallet"></i> Create Wallet</a></li>
+                <li><a href="#import-wallet"><i class="fas fa-file-import"></i> Import Wallet</a></li>
+                <li><a href="#wallet-usecases"><i class="fas fa-briefcase"></i> Wallet Use Cases</a></li>
+                <li><a href="#mine-block"><i class="fas fa-gem"></i> Mine a Block</a></li>
+                <li><a href="#create-pool"><i class="fas fa-users-cog"></i> Create Pool</a></li>
+                <li><a href="#join-pool"><i class="fas fa-user-plus"></i> Join Pool</a></li>
+                <li><a href="#wallet-details"><i class="fas fa-wallet"></i> Wallet Details</a></li>
+            </ul>
+        </nav>
+    </header>
+    
+    <div class="search-bar">
+    <form id="searchForm">
+        <div class="form-group">
+            <label for="searchQuery">Enter Token Address, Transaction Hash, or Wallet Address:</label>
+            <input type="text" class="form-control" id="searchQuery" name="query" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Search</button>
+    </form>
+</div>
+
+
+    <section id="intro">
+        <p><i class="fas fa-info-circle"></i> Experience the next generation of blockchain technology with DagKnight. Secure, fast, and scalable.</p>
+    </section>
+    <section id="wallet-details">
+        <h2><i class="fas fa-wallet"></i> Wallet Details</h2>
+        <button id="view-wallet-details-button" class="btn btn-primary"><i class="fas fa-eye"></i> View Wallet Details</button>
+		    <button id="import-token-button" class="btn btn-secondary"><i class="fas fa-file-import"></i> Import Token</button>
+
+    </section>
+
+    <section id="network-status">
+        <h2><i class="fas fa-network-wired"></i> Network Status</h2>
+        <canvas id="networkChart"></canvas>
+        <button id="view-network-status-button" class="btn btn-primary"><i class="fas fa-eye"></i> View Network Status</button>
+    </section>
+    
+            <section id="create-transaction">
+            <h2><i class="fas fa-exchange-alt"></i> Create Transaction</h2>
+            <form action="{% url 'create_transaction' %}" method="post">
+                {% csrf_token %}
+                <label for="sender"><i class="fas fa-user"></i> Sender:</label>
+                <select id="sender" name="sender" required>
+                    {% for wallet in wallets %}
+                        <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
+                    {% endfor %}
+                </select><br><br>
+                <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
+                <input type="text" id="receiver" name="receiver" required><br><br>
+                <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
+                <input type="number" id="amount" name="amount" required><br><br>
+                <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
+                <input type="number" id="fee" name="fee" required><br><br>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
+            </form>
+        </section>
+
+
+    <section id="create-wallet">
+        <h2><i class="fas fa-wallet"></i> Create Wallet</h2>
+        <form id="create-wallet-form" action="{% url 'register' %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus-circle"></i> Create Wallet</button>
+        </form>
+    </section>
+
+    <section id="import-wallet">
+        <h2><i class="fas fa-file-import"></i> Import Wallet</h2>
+        <form id="import-wallet-form" action="{% url 'import_wallet' %}" method="post">
+            {% csrf_token %}
+            <label for="mnemonic"><i class="fas fa-key"></i> 12-word Mnemonic:</label>
+            <input type="text" id="mnemonic" name="mnemonic" required><br><br>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-file-import"></i> Import Wallet</button>
+        </form>
+    </section>
+    
+    <section id="wallet-usecases">
+        <h2><i class="fas fa-briefcase"></i> Wallet Use Cases</h2>
+        <p>DagKnight wallets can be used for:</p>
+        <ul>
+            <li><i class="fas fa-exchange-alt"></i> Sending and receiving transactions</li>
+            <li><i class="fas fa-lock"></i> Storing cryptocurrency securely</li>
+            <li><i class="fas fa-th"></i> Participating in decentralized applications (dApps)</li>
+            <li><i class="fas fa-vote-yea"></i> Voting in blockchain governance</li>
+        </ul>
+    </section>
+    
+    <section id="mine-block">
+        <h2><i class="fas fa-gem"></i> Mine a Block</h2>
+        <button id="start-mining-button" class="btn btn-primary"><i class="fas fa-hammer"></i> Start Mining</button>
+        <button id="stop-mining-button" class="btn btn-danger" style="display:none;"><i class="fas fa-stop-circle"></i> Stop Mining</button>
+        
+        <div id="mining-stats">
+            <h3>Mining Statistics</h3>
+            <p><strong>Hashrate:</strong> <span id="hashrate">0</span> H/s</p>
+            <p><strong>Blocks Mined:</strong> <span id="blocks-mined">0</span></p>
+            <p><strong>Total Rewards:</strong> <span id="total-rewards">0</span> ETH</p>
+        </div>
+    </section>
+    
+    <section id="create-pool">
+        <h2><i class="fas fa-users-cog"></i> Create Pool</h2>
+        <form id="create-pool-form" action="{% url 'create_pool' %}" method="post">
+            {% csrf_token %}
+            <label for="pool_name"><i class="fas fa-user-edit"></i> Pool Name:</label>
+            <input type="text" id="pool_name" name="name" required><br><br>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-plus-circle"></i> Create Pool</button>
+        </form>
+    </section>
+
+    <section id="join-pool">
+        <h2><i class="fas fa-user-plus"></i> Join Pool</h2>
+        <form id="join-pool-form" action="/join_pool/" method="post">
+            {% csrf_token %}
+            <label for="pool_id"><i class="fas fa-id-card"></i> Pool ID:</label>
+            <input type="text" id="pool_id" name="pool_id" required><br><br>
+            <input type="hidden" id="hidden_pool_id" name="pool_id">
+            <button type="submit" class="btn btn-primary"><i class="fas fa-sign-in-alt"></i> Join Pool</button>
+        </form>
+    </section>
+
+    <section id="top-pools">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pool Name</th>
+                        <th>Number of Users</th>
+                        <th>Hashrate</th>
+                        <th>Rewards</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="pool-table-body">
+                    {% for pool in top_pools %}
+                        <tr>
+                            <td>{{ pool.name }}</td>
+                            <td>{{ pool.num_users }}</td>
+                            <td>{{ pool.hashrate }}</td>
+                            <td>{{ pool.rewards }}</td>
+                            <td>
+                                <form class="join-pool-form" action="/join_pool/{{ pool.id }}/" method="post">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-primary">Join Pool</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="smartcontract">
+        <h1>Manage Contract</h1>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit">Save</button>
+        </form>
+        <form id="deploy-contract-form" method="post" action="{% url 'deploy_contract' %}">
+    {% csrf_token %}
+    <label for="name">Token Name:</label>
+    <input type="text" id="name" name="name"><br>
+    <label for="symbol">Token Symbol:</label>
+    <input type="text" id="symbol" name="symbol"><br>
+    <label for="initialSupply">Initial Supply:</label>
+    <input type="number" id="initialSupply" name="initialSupply"><br>
+    <label for="enableLiquidityPool">Enable Liquidity Pool:</label>
+    <input type="checkbox" id="enableLiquidityPool" name="enableLiquidityPool"><br>
+    <div id="liquidityPoolOptions" style="display: none;">
+        <label for="useNativeToken">Use Native Token:</label>
+        <input type="checkbox" id="useNativeToken" name="useNativeToken"><br>
+        <label for="tokenPair1">Token Pair 1:</label>
+        <input type="text" id="tokenPair1" name="tokenPair1"><br>
+        <label for="tokenPair2">Token Pair 2:</label>
+        <input type="text" id="tokenPair2" name="tokenPair2"><br>
+        <label for="token1Amount">Token 1 Amount:</label>
+        <input type="number" id="token1Amount" name="token1Amount">
+        <button type="button" id="maxToken1Amount" class="btn btn-secondary">Max Total Supply</button><br>
+        <label for="token2Amount">Token 2 Amount:</label>
+        <input type="number" id="token2Amount" name="token2Amount">
+        <button type="button" id="maxToken2Amount" class="btn btn-secondary">Max Total Supply</button><br>
+    </div>
+    <button type="submit" class="btn btn-primary">Deploy Contract</button>
+</form>
+
+
+    </section>
+    </div>
+
+    <footer>
+        <p>&copy; 2024 DagKnight Blockchain. All rights reserved.</p>
+    </footer><div class="modal fade" id="importTokenModal" tabindex="-1" role="dialog" aria-labelledby="importTokenModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="importTokenModalLabel"><i class="fas fa-file-import"></i> Import Token</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="import-token-form">
+                    {% csrf_token %}
+                    <div class="form-group">
+                        <label for="tokenAddress">Token Contract Address:</label>
+                        <input type="text" class="form-control" id="tokenAddress" name="tokenAddress" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="tokenSymbol">Token Symbol:</label>
+                        <input type="text" class="form-control" id="tokenSymbol" name="tokenSymbol" required>
+                    </div>
+                    <input type="hidden" id="walletAddress" name="walletAddress">
+                    <button type="submit" class="btn btn-primary">Import Token</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<div class="modal fade" id="searchResultsModal" tabindex="-1" role="dialog" aria-labelledby="searchResultsModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="searchResultsModalLabel">Search Results</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="searchResultsContent">
+                    <!-- Search results will be displayed here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="modal" id="walletModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="walletModalLabel"><i class="fas fa-wallet"></i> Wallet Details</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p><strong>Alias:</strong><br><span id="wallet-alias"></span></p>
+                <p><strong>Address:</strong><br><span id="wallet-address"></span></p>
+                <p><strong>Public Key:</strong><br><span id="wallet-public-key"></span></p>
+                <p><strong>Private Key:</strong><br><span id="wallet-private-key"></span></p>
+                <p><strong>Balance:</strong><br><span id="wallet-balance"></span></p>
+                <h3>Custom Tokens</h3>
+                <table id="tokens-table">
+                    <thead>
+                        <tr>
+                            <th>Token</th>
+                            <th>Symbol</th>
+                            <th>Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Tokens will be dynamically inserted here -->
+                    </tbody>
+                </table>
+                <h3>Recent Transactions</h3>
+                <table id="transactions-table">
+                    <thead>
+                        <tr>
+                            <th>Hash</th>
+                            <th>Sender</th>
+                            <th>Receiver</th>
+                            <th>Amount</th>
+                            <th>Fee</th>
+                            <th>Timestamp</th>
+                            <th>Approved</th>
+                            <th>Shard</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Transactions will be dynamically inserted here -->
+                    </tbody>
+                </table>
+                <div id="pagination-controls">
+                    <!-- Pagination buttons will be dynamically inserted here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal"><i class="fas fa-times"></i> Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+    <!-- Success Modal -->
+    <div class="modal fade" id="successModal" tabindex="-1" role="dialog" aria-labelledby="successModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="successModalLabel">Deployment Successful</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    Contract deployed successfully at address: <span id="contractAddress"></span>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="networkStatusModal" tabindex="-1" role="dialog" aria-labelledby="networkStatusModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="networkStatusModalLabel"><i class="fas fa-network-wired"></i> Network Details</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="network-status-section">
+                        <h6>Synchronization Status:</h6>
+                        <pre id="sync-status"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 1 Latest Transaction:</h6>
+                        <pre id="node1-latest-transaction"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 1 Transaction Pool:</h6>
+                        <pre id="node1-transaction-pool"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 2 Latest Transaction:</h6>
+                        <pre id="node2-latest-transaction"></pre>
+                    </div>
+                    <div class="network-status-section">
+                        <h6>Node 2 Transaction Pool:</h6>
+                        <pre id="node2-transaction-pool"></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal"><i class="fas fa-times"></i> Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+	    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            if ({{ deployed|default:"false" }}) {
+                $('#contractAddress').text('{{ contract_address }}');
+                $('#successModal').modal('show');
+            }
+        });
+    </script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('networkChart').getContext('2d');
+    let networkChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Number of Transactions',
+                data: [],
+                fill: false,
+                borderColor: 'rgb(75, 192, 192)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    const wsStart = 'wss://';
+    const endpoint = wsStart + window.location.host + '/ws/blockchain/';
+    const socket = new WebSocket(endpoint);
+
+    socket.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        console.log('Message from WebSocket:', data);
+        if (data.message) {
+            const currentTime = new Date().toLocaleTimeString();
+            networkChart.data.labels.push(currentTime);
+            networkChart.data.datasets.forEach((dataset) => {
+                dataset.data.push(data.message);
+            });
+            networkChart.update();
+        }
+    };
+
+    socket.onopen = function(e) {
+        console.log('WebSocket open', e);
+    };
+
+    socket.onerror = function(e) {
+        console.log('WebSocket error', e);
+    };
+
+    socket.onclose = function(e) {
+        console.log('WebSocket closed', e);
+    };
+
+    $('#view-network-status-button').click(async function() {
+        const response = await fetch('/network_status/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Network status data:', data);
+            const syncStatus = data.is_synchronized ? "Nodes are synchronized" : "Nodes are not synchronized";
+
+            $('#sync-status').text(syncStatus);
+            $('#node1-latest-transaction').text(data.node1_latest_transaction ? JSON.stringify(data.node1_latest_transaction, null, 2) : 'No data');
+            $('#node1-transaction-pool').text(data.node1_transaction_pool ? JSON.stringify(data.node1_transaction_pool, null, 2) : 'No data');
+            $('#node2-latest-transaction').text(data.node2_latest_transaction ? JSON.stringify(data.node2_latest_transaction, null, 2) : 'No data');
+            $('#node2-transaction-pool').text(data.node2_transaction_pool ? JSON.stringify(data.node2_transaction_pool, null, 2) : 'No data');
+
+            $('#networkStatusModal').modal('show');
+        } else {
+            alert('Failed to fetch network status');
+        }
+    });
+
+    const startMiningButton = document.getElementById('start-mining-button');
+    const stopMiningButton = document.getElementById('stop-mining-button');
+    const hashrateElem = document.getElementById('hashrate');
+    const blocksMinedElem = document.getElementById('blocks-mined');
+    const totalRewardsElem = document.getElementById('total-rewards');
+
+    async function fetchMiningStats() {
+        const response = await fetch('/get_mining_statistics/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            const data = await response.json();
+            hashrateElem.textContent = data.hashrate.toFixed(2);
+            blocksMinedElem.textContent = data.blocks_mined;
+            totalRewardsElem.textContent = data.total_rewards.toFixed(4);
+        }
+    }
+
+    let miningStatsInterval;
+
+    startMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/start_mining/1/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining started');
+            startMiningButton.style.display = 'none';
+            stopMiningButton.style.display = 'block';
+            miningStatsInterval = setInterval(fetchMiningStats, 5000); // Fetch stats every 5 seconds
+        } else {
+            alert('Failed to start mining');
+        }
+    });
+
+    stopMiningButton.addEventListener('click', async function() {
+        const response = await fetch('/stop_mining/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            alert('Mining stopped');
+            startMiningButton.style.display = 'block';
+            stopMiningButton.style.display = 'none';
+            clearInterval(miningStatsInterval);
+        } else {
+            alert('Failed to stop mining');
+        }
+    });
+
+    $('#create-pool-form').submit(function(event) {
+        event.preventDefault();
+        const form = $(this);
+
+        console.log(`Attempting to create pool with name: ${$('#pool_name').val()}`);
+
+        $.ajax({
+            type: 'POST',
+            url: form.attr('action'),
+            data: form.serialize(),
+            success: function(data) {
+                console.log('Create pool success response:', data);
+                alert(`Pool created successfully with ID: ${data.pool_id}`);
+                // Update join pool form action
+                $('#join-pool-form').attr('action', `/join_pool/${data.pool_id}/`);
+                $('#pool_id').val(data.pool_id); // Optionally set the pool ID in the input
+            },
+            error: function(xhr) {
+                console.log('Create pool error response:', xhr);
+                let errorMessage = 'Error creating pool.';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMessage = xhr.responseJSON.error;
+                }
+                alert(errorMessage);
+            }
+        });
+    });
+
+    $('#join-pool-form').submit(function(event) {
+        event.preventDefault();
+        const form = $(this);
+        const pool_id = $('#pool_id').val();
+
+        console.log(`Attempting to join pool with ID: ${pool_id}`);
+
+        $.ajax({
+            type: 'POST',
+            url: `/join_pool/${pool_id}/`,
+            data: form.serialize(),
+            success: function(data) {
+                console.log('Join pool success response:', data);
+                alert('Joined pool successfully');
+            },
+            error: function(xhr) {
+                console.log('Join pool error response:', xhr);
+                let errorMessage = 'Error joining pool.';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMessage = xhr.responseJSON.error;
+                }
+                alert(errorMessage);
+            }
+        });
+    });
+
+    let currentPage = 1;
+
+    async function fetchWalletDetails(page) {
+        const response = await fetch(`/get_wallet_details/?page=${page}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Wallet details fetched:', data);
+
+            let transactionsTable = `
+                <h3>Recent Transactions</h3>
+                <table id="transactions-table">
+                    <thead>
+                        <tr>
+                            <th>Hash</th>
+                            <th>Sender</th>
+                            <th>Receiver</th>
+                            <th>Amount</th>
+                            <th>Fee</th>
+                            <th>Timestamp</th>
+                            <th>Approved</th>
+                            <th>Shard</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            if (data.transactions && data.transactions.length > 0) {
+                data.transactions.forEach(tx => {
+                    transactionsTable += `
+                        <tr>
+                            <td>${tx.hash}</td>
+                            <td>${tx.sender}</td>
+                            <td>${tx.receiver}</td>
+                            <td>${tx.amount}</td>
+                            <td>${tx.fee}</td>
+                            <td>${tx.timestamp}</td>
+                            <td>${tx.is_approved}</td>
+                            <td>${tx.shard}</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            transactionsTable += `</tbody></table>`;
+
+            let tokensTable = `
+                <h3>Custom Tokens</h3>
+                <table id="tokens-table">
+                    <thead>
+                        <tr>
+                            <th>Token</th>
+                            <th>Symbol</th>
+                            <th>Balance</th>
+                            <th>Custom Token Address</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            if (data.custom_tokens && data.custom_tokens.length > 0) {
+                data.custom_tokens.forEach(token => {
+                    tokensTable += `
+                        <tr>
+                            <td>${token.name}</td>
+                            <td>${token.symbol}</td>
+                            <td>${token.balance}</td>
+                            <td>${token.address}</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            tokensTable += `</tbody></table>`;
+
+            let liquidityPoolsTable = `
+                <h3>Liquidity Pools</h3>
+                <table id="liquidity-pools-table">
+                    <thead>
+                        <tr>
+                            <th>Liquidity Pool Address</th>
+                            <th>ABI</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            if (data.liquidity_pools && data.liquidity_pools.length > 0) {
+                data.liquidity_pools.forEach(pool => {
+                    liquidityPoolsTable += `
+                        <tr>
+                            <td>${pool.address}</td>
+                            <td>${pool.abi}</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            liquidityPoolsTable += `</tbody></table>`;
+
+            let paginationControls = `
+                <div id="pagination-controls">
+                    <button ${data.current_page === 1 ? 'disabled' : ''} id="prev-page" class="btn btn-primary">Previous</button>
+                    <span>Page ${data.current_page} of ${data.total_pages}</span>
+                    <button ${data.current_page === data.total_pages ? 'disabled' : ''} id="next-page" class="btn btn-primary">Next</button>
+                </div>
+            `;
+
+            $('#walletModal .modal-body').html(
+                `<p><strong>Alias:</strong><br>${data.alias || 'N/A'}</p>
+                 <p><strong>Address:</strong><br>${data.address || 'N/A'}</p>
+                 <p><strong>Public Key:</strong><br>${data.public_key || 'N/A'}</p>
+                 <p><strong>Private Key:</strong><br>${data.private_key || 'N/A'}</p>
+                 <p><strong>Balance:</strong><br>${data.balance}</p>
+                 ${tokensTable}
+                 ${liquidityPoolsTable}
+                 ${transactionsTable}
+                 ${paginationControls}`
+            );
+
+            document.getElementById('prev-page').addEventListener('click', function() {
+                if (currentPage > 1) {
+                    currentPage--;
+                    fetchWalletDetails(currentPage);
+                }
+            });
+
+            document.getElementById('next-page').addEventListener('click', function() {
+                if (currentPage < data.total_pages) {
+                    currentPage++;
+                    fetchWalletDetails(currentPage);
+                }
+            });
+
+            $('#walletModal').modal('show');
+        } else {
+            alert('Failed to fetch wallet details');
+        }
+    }
+
+    document.getElementById('view-wallet-details-button').addEventListener('click', function() {
+        currentPage = 1; // Reset to first page
+        fetchWalletDetails(currentPage);
+    });
+
+    // WebSocket for transaction updates
+    const transactionSocket = new WebSocket('wss://' + window.location.host + '/ws/transactions/');
+
+    transactionSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Transaction update received:', data);
+
+        const transactionsTableBody = document.getElementById('transactions-table').getElementsByTagName('tbody')[0];
+
+        const row = transactionsTableBody.insertRow(0);  // Insert new row at the beginning
+        row.innerHTML = `
+            <td>${data.hash}</td>
+            <td>${data.sender}</td>
+            <td>${data.receiver}</td>
+            <td>${data.amount}</td>
+            <td>${data.fee}</td>
+            <td>${data.timestamp}</td>
+            <td>${data.is_approved}</td>
+            <td>${data.shard}</td>
+        `;
+    };
+
+    transactionSocket.onopen = function(e) {
+        console.log('Transaction WebSocket open', e);
+    };
+
+    transactionSocket.onerror = function(e) {
+        console.log('Transaction WebSocket error', e);
+    };
+
+    transactionSocket.onclose = function(e) {
+        console.log('Transaction WebSocket closed', e);
+    };
+
+    $('.join-pool-form').submit(function(event) {
+        event.preventDefault();
+        const form = $(this);
+
+        console.log(`Attempting to join pool with action URL: ${form.attr('action')}`);
+
+        $.ajax({
+            type: 'POST',
+            url: form.attr('action'),
+            data: form.serialize(),
+            success: function(data) {
+                console.log('Join pool success response:', data);
+                alert('Joined pool successfully');
+            },
+            error: function(xhr) {
+                console.log('Join pool error response:', xhr);
+                let errorMessage = 'Error joining pool.';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMessage = xhr.responseJSON.error;
+                }
+                alert(errorMessage);
+            }
+        });
+    });
+
+    // WebSocket for pool updates
+    const poolTableBody = document.getElementById('pool-table-body');
+    let poolSocket = new WebSocket('wss://' + window.location.host + '/ws/pools/');
+
+    poolSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Pools WebSocket message received:', data);
+        const pools = data.pools;
+        poolTableBody.innerHTML = '';
+        pools.forEach(pool => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${pool.name}</td>
+                <td>${pool.num_users}</td>
+                <td>${pool.hashrate.toFixed(2)} H/s</td>
+                <td>${pool.rewards}</td>
+                <td>
+                    <form class="join-pool-form" action="/join_pool/${pool.id}/" method="post">
+                        <input type="hidden" name="csrfmiddlewaretoken" value="${csrftoken}">
+                        <button type="submit" class="btn btn-primary">Join Pool</button>
+                    </form>
+                </td>
+            `;
+            poolTableBody.appendChild(row);
+        });
+    };
+
+    poolSocket.onopen = function(e) {
+        console.log('Pool WebSocket open', e);
+    };
+
+    poolSocket.onerror = function(e) {
+        console.log('Pool WebSocket error', e);
+    };
+
+    poolSocket.onclose = function(e) {
+        console.log('Pool WebSocket closed', e);
+        setTimeout(function() {
+            console.log('Reconnecting Pool WebSocket...');
+            poolSocket = new WebSocket('wss://' + window.location.host + '/ws/pools/');
+        }, 1000);
+    };
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    const csrftoken = getCookie('csrftoken');
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('search-button').addEventListener('click', async function() {
+        const searchInput = document.getElementById('search-input').value.trim();
+        if (searchInput === '') {
+            alert('Please enter a transaction hash or wallet address to search.');
+            return;
+        }
+
+        const searchParams = new URLSearchParams();
+        searchParams.append('address', searchInput);
+
+        if (searchInput.length === 64) { // Assuming the hash length is 64 characters
+            searchParams.append('hash', searchInput);
+        }
+
+        try {
+            const response = await fetch(`/search_transaction/?${searchParams.toString()}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    if (data.hash) {
+                        alert(`Transaction found: ${JSON.stringify(data, null, 2)}`);
+                    } else if (data.address && data.abi) {
+                        alert(`Contract found: Address: ${data.address}, ABI: ${JSON.stringify(data.abi)}`);
+                    } else if (data.address) {
+                        alert(`Wallet found: ${JSON.stringify(data, null, 2)}`);
+                    } else {
+                        alert('No valid data found.');
+                    }
+                }
+            } else {
+                const errorText = await response.text();
+                alert(`Failed to fetch details. Status: ${response.status}, Message: ${errorText}`);
+            }
+        } catch (error) {
+            alert(`An error occurred while fetching details: ${error}`);
+        }
+    });
+});
+
+var syncStatusSocket = new WebSocket('wss://' + window.location.host + '/ws/sync_status/');
+
+syncStatusSocket.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    console.log('Synchronization Status:', data);
+    // Update your UI based on the synchronization status
+};
+
+syncStatusSocket.onclose = function(e) {
+    console.error('WebSocket closed unexpectedly');
+};
+</script>
+
+<script>
+$(document).ready(function() {
+    $('#deploy-contract-form').submit(function(event) {
+        event.preventDefault(); // Prevent the form from submitting normally
+        $.ajax({
+            type: 'POST',
+            url: $(this).attr('action'),
+            data: $(this).serialize(),
+            success: function(response) {
+                if (response.deployed) {
+                    $('#contractAddress').text(response.contract_address);
+                    $('#successModal').modal('show');
+                } else if (response.error) {
+                    alert('Error: ' + response.error);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('AJAX error: ' + error);
+            }
+        });
+    });
+});
+</script>
+
+<script>
+$(document).ready(function() {
+    $('#searchForm').submit(function(event) {
+        event.preventDefault();
+        const query = $('#searchQuery').val().trim();
+
+        if (query) {
+            fetch(`/search_transaction/?query=${query}`)
+                .then(response => response.json())
+                .then(data => {
+                    $('#searchResultsContent').html(generateResultsHtml(data));
+                    $('#searchResultsModal').modal('show');
+                })
+                .catch(error => {
+                    $('#searchResultsContent').html('<div class="alert alert-danger">An error occurred: ' + error + '</div>');
+                    $('#searchResultsModal').modal('show');
+                });
+        } else {
+            alert('Please enter a valid query.');
+        }
+    });
+
+    function generateResultsHtml(data) {
+        if (data.error) {
+            return '<div class="alert alert-danger">' + data.error + '</div>';
+        }
+
+        let html = '<ul class="list-group">';
+        if (data.hash) {
+            html += `<li class="list-group-item"><strong>Transaction Hash:</strong> ${data.hash}</li>`;
+            html += `<li class="list-group-item"><strong>Sender:</strong> ${data.sender}</li>`;
+            html += `<li class="list-group-item"><strong>Receiver:</strong> ${data.receiver}</li>`;
+            html += `<li class="list-group-item"><strong>Amount:</strong> ${data.amount}</li>`;
+            html += `<li class="list-group-item"><strong>Fee:</strong> ${data.fee}</li>`;
+            html += `<li class="list-group-item"><strong>Timestamp:</strong> ${data.timestamp}</li>`;
+            html += `<li class="list-group-item"><strong>Is Approved:</strong> ${data.is_approved}</li>`;
+            html += `<li class="list-group-item"><strong>Shard:</strong> ${data.shard}</li>`;
+        } else if (data.address) {
+            html += `<li class="list-group-item"><strong>Address:</strong> ${data.address}</li>`;
+            html += `<li class="list-group-item"><strong>Balance:</strong> ${data.balance}</li>`;
+            if (data.transactions_sent && data.transactions_sent.length > 0) {
+                html += '<li class="list-group-item"><strong>Transactions Sent:</strong><ul>';
+                data.transactions_sent.forEach(tx => {
+                    html += `<li>Hash: ${tx.hash}, Receiver: ${tx.receiver}, Amount: ${tx.amount}, Fee: ${tx.fee}, Timestamp: ${tx.timestamp}, Is Approved: ${tx.is_approved}, Shard: ${tx.shard}</li>`;
+                });
+                html += '</ul></li>';
+            }
+            if (data.transactions_received && data.transactions_received.length > 0) {
+                html += '<li class="list-group-item"><strong>Transactions Received:</strong><ul>';
+                data.transactions_received.forEach(tx => {
+                    html += `<li>Hash: ${tx.hash}, Sender: ${tx.sender}, Amount: ${tx.amount}, Fee: ${tx.fee}, Timestamp: ${tx.timestamp}, Is Approved: ${tx.is_approved}, Shard: ${tx.shard}</li>`;
+                });
+                html += '</ul></li>';
+            }
+            if (data.custom_tokens && data.custom_tokens.length > 0) {
+                html += '<li class="list-group-item"><strong>Custom Tokens:</strong><ul>';
+                data.custom_tokens.forEach(token => {
+                    html += `<li>Name: ${token.name}, Symbol: ${token.symbol}, Balance: ${token.balance}, Total Supply: ${token.total_supply}</li>`;
+                });
+                html += '</ul></li>';
+            }
+        } else if (data.contract) {
+            html += `<li class="list-group-item"><strong>Contract Address:</strong> ${data.address}</li>`;
+            html += `<li class="list-group-item"><strong>ABI:</strong> ${JSON.stringify(data.abi)}</li>`;
+            html += `<li class="list-group-item"><strong>Created At:</strong> ${data.created_at}</li>`;
+            html += `<li class="list-group-item"><strong>Updated At:</strong> ${data.updated_at}</li>`;
+        } else {
+            html += '<li class="list-group-item">No results found</li>';
+        }
+        html += '</ul>';
+        return html;
+    }
+});
+</script>
+
+    </body>
+</html>

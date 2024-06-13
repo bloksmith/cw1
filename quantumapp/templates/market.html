@@ -1,0 +1,232 @@
+{% extends 'base.html' %}
+
+{% block title %}Trading Page - DagKnight Blockchain{% endblock %}
+
+{% block content %}
+<style>
+.container {
+    display: flex;
+    width: calc(100% - 270px); /* Adjusting width to account for sidebar */
+    height: 90vh;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    margin-left: 270px; /* Adding margin to push content to the right of the sidebar */
+}
+
+.left-panel, .right-panel {
+    width: 20%;
+    padding: 10px;
+    border-right: 1px solid #ddd;
+}
+
+.main-panel {
+    width: 60%;
+    padding: 10px;
+}
+
+.title {
+    text-align: center;
+}
+
+.chart {
+    height: 300px;
+    background: #eee;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.trade-ui {
+    display: flex;
+    justify-content: space-between;
+}
+
+.trade-ui div {
+    width: 48%;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+}
+
+form label, form input, form button {
+    margin-bottom: 10px;
+}
+
+.token-list, .order-book {
+    margin-top: 10px;
+}
+
+.token, .order {
+    padding: 5px;
+    border-bottom: 1px solid #ddd;
+}
+
+.token:hover, .order:hover {
+    background: #f9f9f9;
+    cursor: pointer;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+form input {
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
+        width: 100%; /* Ensure it takes full width on smaller screens */
+        margin-left: 0; /* Remove margin on smaller screens */
+    }
+    .order-book, .trade-chart, .token-list {
+        width: 100%;
+    }
+}
+</style>
+
+<div class="container">
+    <div class="left-panel">
+        <h2>Order Book</h2>
+        <div class="order-book">
+            <!-- Test data for order book -->
+            <div class="order">Ask: 0.01234 BTC @ $45,000</div>
+            <div class="order">Bid: 0.02345 BTC @ $44,900</div>
+        </div>
+    </div>
+        <div class="main-panel">
+        <div class="title">
+            <h1>BOME/USDT</h1>
+            <div class="trading-info">
+                <p><strong>0.009867</strong> <span style="color: green;">+1.65%</span></p>
+                <p>$0.0098</p>
+                <p><strong>24h High:</strong> 0.010985</p>
+                <p><strong>24h Low:</strong> 0.009479</p>
+                <p><strong>24h Volume (BOME):</strong> 63.57M</p>
+                <p><strong>24h Amount (USDT):</strong> 646.42K</p>
+            </div>
+        </div>
+
+        <div class="chart">
+            <!-- Placeholder for chart -->
+            <div id="chart-container"></div>
+        </div>
+        <div class="trade-ui">
+            <div class="buy-ui">
+                <h3>Buy BOME</h3>
+                <form>
+                    <label for="buy-price">Price</label>
+                    <input type="number" id="buy-price" name="buy-price">
+                    <label for="buy-amount">Amount</label>
+                    <input type="number" id="buy-amount" name="buy-amount">
+                    <button type="submit">Buy</button>
+                </form>
+            </div>
+            <div class="sell-ui">
+                <h3>Sell BOME</h3>
+                <form>
+                    <label for="sell-price">Price</label>
+                    <input type="number" id="sell-price" name="sell-price">
+                    <label for="sell-amount">Amount</label>
+                    <input type="number" id="sell-amount" name="sell-amount">
+                    <button type="submit">Sell</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="right-panel">
+        <h2>Token Search</h2>
+        <input type="text" id="token-search" placeholder="Search for a token">
+        <div class="token-list">
+            <!-- Test data for token list -->
+            <div class="token">BTC/USDT</div>
+            <div class="token">ETH/USDT</div>
+            <div class="token">BOME/USDT</div>
+        </div>
+    </div>
+</div>
+
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+document.getElementById('token-search').addEventListener('input', function () {
+    let filter = this.value.toUpperCase();
+    let tokens = document.getElementsByClassName('token');
+
+    for (let i = 0; i < tokens.length; i++) {
+        let token = tokens[i];
+        if (token.textContent.toUpperCase().indexOf(filter) > -1) {
+            token.style.display = '';
+        } else {
+            token.style.display = 'none';
+        }
+    }
+});
+
+const orders = [
+    { type: 'ask', amount: '0.01234 BTC', price: '$45,000' },
+    { type: 'bid', amount: '0.02345 BTC', price: '$44,900' },
+    // Add more test data as needed
+];
+
+const orderBookContainer = document.querySelector('.order-book');
+orders.forEach(order => {
+    const orderDiv = document.createElement('div');
+    orderDiv.classList.add('order');
+    orderDiv.textContent = `${order.type === 'ask' ? 'Ask' : 'Bid'}: ${order.amount} @ ${order.price}`;
+    orderBookContainer.appendChild(orderDiv);
+});
+
+document.querySelector('.buy-ui form').addEventListener('submit', function(event) {
+    event.preventDefault();
+    const price = parseFloat(document.getElementById('buy-price').value);
+    const amount = parseFloat(document.getElementById('buy-amount').value);
+    if (isNaN(price) || price <= 0) {
+        alert('Please enter a valid price.');
+        return;
+    }
+    if (isNaN(amount) || amount <= 0) {
+        alert('Please enter a valid amount.');
+        return;
+    }
+    // Process the buy order
+    console.log(`Buy order: ${amount} at ${price}`);
+    // Add your order processing logic here
+});
+
+document.querySelector('.sell-ui form').addEventListener('submit', function(event) {
+    event.preventDefault();
+    const price = parseFloat(document.getElementById('sell-price').value);
+    const amount = parseFloat(document.getElementById('sell-amount').value);
+    if (isNaN(price) || price <= 0) {
+        alert('Please enter a valid price.');
+        return;
+    }
+    if (isNaN(amount) || amount <= 0) {
+        alert('Please enter a valid amount.');
+        return;
+    }
+    // Process the sell order
+    console.log(`Sell order: ${amount} at ${price}`);
+    // Add your order processing logic here
+});
+</script>
+{% endblock %}
