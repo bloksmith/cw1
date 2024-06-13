@@ -1,5 +1,5 @@
 import requests
-
+import os
 def get_node_status(node_url):
     try:
         latest_transaction = requests.get(f"{node_url}/get_latest_transaction/").json()

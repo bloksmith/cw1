@@ -5449,11 +5449,3 @@ class Command(BaseCommand):
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"Error syncing with master node: {e}"))
 
-# Ensure to set up a cron job or a Celery task to call this command periodically
-# For example, add this to a Celery task
-
-from celery import shared_task
-
-@shared_task
-def sync_with_master_node():
-    call_command('sync_with_master')
