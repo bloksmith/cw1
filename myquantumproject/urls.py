@@ -3,7 +3,7 @@ from django.urls import path
 from quantumapp import views
 from django.conf import settings
 from django.conf.urls.static import static
-from .sync_utils import synchronize_nodes  # Import synchronize_nodes from sync_utils
+from quantumapp.sync_utils import synchronize_nodes  # Import synchronize_nodes from quantumapp.sync_utils
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
