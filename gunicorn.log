@@ -5399,3 +5399,210 @@ NameError: name 'list_nodes' is not defined
 [2024-06-14 03:09:47 +0000] [4691] [INFO] Finished server process [4691]
 [2024-06-14 03:09:47 +0000] [4690] [ERROR] Worker (pid:4691) was sent SIGINT!
 [2024-06-14 03:09:47 +0000] [4690] [INFO] Shutting down: Master
+[2024-06-14 03:14:43 +0000] [205751] [DEBUG] Current configuration:
+  config: ./gunicorn.conf.py
+  wsgi_app: None
+  bind: ['0.0.0.0:1010']
+  backlog: 2048
+  workers: 1
+  worker_class: uvicorn.workers.UvicornWorker
+  threads: 1
+  worker_connections: 1000
+  max_requests: 0
+  max_requests_jitter: 0
+  timeout: 120
+  graceful_timeout: 30
+  keepalive: 2
+  limit_request_line: 4094
+  limit_request_fields: 100
+  limit_request_field_size: 8190
+  reload: False
+  reload_engine: auto
+  reload_extra_files: []
+  spew: False
+  check_config: False
+  print_config: False
+  preload_app: False
+  sendfile: None
+  reuse_port: False
+  chdir: /home/myuser/myquantumproject
+  daemon: False
+  raw_env: []
+  pidfile: None
+  worker_tmp_dir: None
+  user: 0
+  group: 0
+  umask: 0
+  initgroups: False
+  tmp_upload_dir: None
+  secure_scheme_headers: {'X-FORWARDED-PROTOCOL': 'ssl', 'X-FORWARDED-PROTO': 'https', 'X-FORWARDED-SSL': 'on'}
+  forwarded_allow_ips: ['127.0.0.1']
+  accesslog: None
+  disable_redirect_access_to_syslog: False
+  access_log_format: %(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"
+  errorlog: gunicorn.log
+  loglevel: debug
+  capture_output: False
+  logger_class: gunicorn.glogging.Logger
+  logconfig: None
+  logconfig_dict: {}
+  logconfig_json: None
+  syslog_addr: udp://localhost:514
+  syslog: False
+  syslog_prefix: None
+  syslog_facility: user
+  enable_stdio_inheritance: False
+  statsd_host: None
+  dogstatsd_tags: 
+  statsd_prefix: 
+  proc_name: None
+  default_proc_name: myquantumproject.asgi:application
+  pythonpath: /home/myuser/myquantumproject/new-env1/bin/python3.9
+  paste: None
+  on_starting: <function OnStarting.on_starting at 0x7f8023ef5af0>
+  on_reload: <function OnReload.on_reload at 0x7f8023ef5c10>
+  when_ready: <function WhenReady.when_ready at 0x7f8023ef5d30>
+  pre_fork: <function Prefork.pre_fork at 0x7f8023ef5e50>
+  post_fork: <function Postfork.post_fork at 0x7f8023ef5f70>
+  post_worker_init: <function PostWorkerInit.post_worker_init at 0x7f8023f0e0d0>
+  worker_int: <function WorkerInt.worker_int at 0x7f8023f0e1f0>
+  worker_abort: <function WorkerAbort.worker_abort at 0x7f8023f0e310>
+  pre_exec: <function PreExec.pre_exec at 0x7f8023f0e430>
+  pre_request: <function PreRequest.pre_request at 0x7f8023f0e550>
+  post_request: <function PostRequest.post_request at 0x7f8023f0e5e0>
+  child_exit: <function ChildExit.child_exit at 0x7f8023f0e700>
+  worker_exit: <function WorkerExit.worker_exit at 0x7f8023f0e820>
+  nworkers_changed: <function NumWorkersChanged.nworkers_changed at 0x7f8023f0e940>
+  on_exit: <function OnExit.on_exit at 0x7f8023f0ea60>
+  ssl_context: <function NewSSLContext.ssl_context at 0x7f8023f0eb80>
+  proxy_protocol: False
+  proxy_allow_ips: ['127.0.0.1']
+  keyfile: None
+  certfile: None
+  ssl_version: 2
+  cert_reqs: 0
+  ca_certs: None
+  suppress_ragged_eofs: True
+  do_handshake_on_connect: False
+  ciphers: None
+  raw_paste_global_conf: []
+  strip_header_spaces: False
+[2024-06-14 03:14:43 +0000] [205751] [INFO] Starting gunicorn 21.2.0
+[2024-06-14 03:14:43 +0000] [205751] [DEBUG] Arbiter booted
+[2024-06-14 03:14:43 +0000] [205751] [INFO] Listening at: http://0.0.0.0:1010 (205751)
+[2024-06-14 03:14:43 +0000] [205751] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2024-06-14 03:14:43 +0000] [205752] [INFO] Booting worker with pid: 205752
+[2024-06-14 03:14:43 +0000] [205751] [DEBUG] 1 workers
+[2024-06-14 03:14:45 +0000] [205752] [INFO] Started server process [205752]
+[2024-06-14 03:14:45 +0000] [205752] [INFO] Waiting for application startup.
+[2024-06-14 03:14:45 +0000] [205752] [INFO] ASGI 'lifespan' protocol appears unsupported.
+[2024-06-14 03:14:45 +0000] [205752] [INFO] Application startup complete.
+[2024-06-14 03:14:51 +0000] [205751] [INFO] Handling signal: int
+[2024-06-14 03:14:51 +0000] [205752] [INFO] Shutting down
+[2024-06-14 03:14:51 +0000] [205752] [INFO] Finished server process [205752]
+[2024-06-14 03:14:51 +0000] [205751] [ERROR] Worker (pid:205752) was sent SIGINT!
+[2024-06-14 03:14:51 +0000] [205751] [INFO] Shutting down: Master
+[2024-06-14 03:16:05 +0000] [205983] [DEBUG] Current configuration:
+  config: ./gunicorn.conf.py
+  wsgi_app: None
+  bind: ['0.0.0.0:1010']
+  backlog: 2048
+  workers: 1
+  worker_class: uvicorn.workers.UvicornWorker
+  threads: 1
+  worker_connections: 1000
+  max_requests: 0
+  max_requests_jitter: 0
+  timeout: 120
+  graceful_timeout: 30
+  keepalive: 2
+  limit_request_line: 4094
+  limit_request_fields: 100
+  limit_request_field_size: 8190
+  reload: False
+  reload_engine: auto
+  reload_extra_files: []
+  spew: False
+  check_config: False
+  print_config: False
+  preload_app: False
+  sendfile: None
+  reuse_port: False
+  chdir: /home/myuser/myquantumproject
+  daemon: False
+  raw_env: []
+  pidfile: None
+  worker_tmp_dir: None
+  user: 0
+  group: 0
+  umask: 0
+  initgroups: False
+  tmp_upload_dir: None
+  secure_scheme_headers: {'X-FORWARDED-PROTOCOL': 'ssl', 'X-FORWARDED-PROTO': 'https', 'X-FORWARDED-SSL': 'on'}
+  forwarded_allow_ips: ['127.0.0.1']
+  accesslog: None
+  disable_redirect_access_to_syslog: False
+  access_log_format: %(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"
+  errorlog: gunicorn.log
+  loglevel: debug
+  capture_output: False
+  logger_class: gunicorn.glogging.Logger
+  logconfig: None
+  logconfig_dict: {}
+  logconfig_json: None
+  syslog_addr: udp://localhost:514
+  syslog: False
+  syslog_prefix: None
+  syslog_facility: user
+  enable_stdio_inheritance: False
+  statsd_host: None
+  dogstatsd_tags: 
+  statsd_prefix: 
+  proc_name: None
+  default_proc_name: myquantumproject.asgi:application
+  pythonpath: /home/myuser/myquantumproject/new-env1/bin/python3.9
+  paste: None
+  on_starting: <function OnStarting.on_starting at 0x7f3621941af0>
+  on_reload: <function OnReload.on_reload at 0x7f3621941c10>
+  when_ready: <function WhenReady.when_ready at 0x7f3621941d30>
+  pre_fork: <function Prefork.pre_fork at 0x7f3621941e50>
+  post_fork: <function Postfork.post_fork at 0x7f3621941f70>
+  post_worker_init: <function PostWorkerInit.post_worker_init at 0x7f362195a0d0>
+  worker_int: <function WorkerInt.worker_int at 0x7f362195a1f0>
+  worker_abort: <function WorkerAbort.worker_abort at 0x7f362195a310>
+  pre_exec: <function PreExec.pre_exec at 0x7f362195a430>
+  pre_request: <function PreRequest.pre_request at 0x7f362195a550>
+  post_request: <function PostRequest.post_request at 0x7f362195a5e0>
+  child_exit: <function ChildExit.child_exit at 0x7f362195a700>
+  worker_exit: <function WorkerExit.worker_exit at 0x7f362195a820>
+  nworkers_changed: <function NumWorkersChanged.nworkers_changed at 0x7f362195a940>
+  on_exit: <function OnExit.on_exit at 0x7f362195aa60>
+  ssl_context: <function NewSSLContext.ssl_context at 0x7f362195ab80>
+  proxy_protocol: False
+  proxy_allow_ips: ['127.0.0.1']
+  keyfile: None
+  certfile: None
+  ssl_version: 2
+  cert_reqs: 0
+  ca_certs: None
+  suppress_ragged_eofs: True
+  do_handshake_on_connect: False
+  ciphers: None
+  raw_paste_global_conf: []
+  strip_header_spaces: False
+[2024-06-14 03:16:05 +0000] [205983] [INFO] Starting gunicorn 21.2.0
+[2024-06-14 03:16:05 +0000] [205983] [DEBUG] Arbiter booted
+[2024-06-14 03:16:05 +0000] [205983] [INFO] Listening at: http://0.0.0.0:1010 (205983)
+[2024-06-14 03:16:05 +0000] [205983] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2024-06-14 03:16:05 +0000] [205984] [INFO] Booting worker with pid: 205984
+[2024-06-14 03:16:05 +0000] [205983] [DEBUG] 1 workers
+[2024-06-14 03:16:06 +0000] [205984] [INFO] Started server process [205984]
+[2024-06-14 03:16:06 +0000] [205984] [INFO] Waiting for application startup.
+[2024-06-14 03:16:06 +0000] [205984] [INFO] ASGI 'lifespan' protocol appears unsupported.
+[2024-06-14 03:16:06 +0000] [205984] [INFO] Application startup complete.
+[2024-06-14 03:17:31 +0000] [205983] [INFO] Handling signal: int
+[2024-06-14 03:17:31 +0000] [205984] [INFO] Shutting down
+[2024-06-14 03:17:31 +0000] [205984] [INFO] Waiting for connections to close. (CTRL+C to force quit)
+[2024-06-14 03:17:31 +0000] [205984] [INFO] Finished server process [205984]
+[2024-06-14 03:17:31 +0000] [205983] [ERROR] Worker (pid:205984) was sent SIGINT!
+[2024-06-14 03:17:31 +0000] [205983] [INFO] Shutting down: Master

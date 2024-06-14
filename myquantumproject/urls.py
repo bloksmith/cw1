@@ -39,8 +39,8 @@ urlpatterns = [
     path('burn_token/', views.burn_token, name='burn_token'),
     path('mint_token/', views.mint_token, name='mint_token'),
     path('api/nodes/', views.list_nodes, name='list_nodes'),
-    path('api/register_node/', register_node, name='register_node'),
-    path('api/synchronize_nodes/', synchronize_nodes, name='synchronize_nodes'),
+    path('api/register_node/', views.register_node, name='register_node'),
+    path('api/synchronize_nodes/', views.synchronize_nodes, name='synchronize_nodes'),
 
 
 
