@@ -3,6 +3,7 @@ from django.urls import path
 from quantumapp import views
 from django.conf import settings
 from django.conf.urls.static import static
+from .sync_utils import synchronize_nodes  # Import synchronize_nodes from sync_utils
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
@@ -40,7 +41,7 @@ urlpatterns = [
     path('mint_token/', views.mint_token, name='mint_token'),
     path('api/nodes/', views.list_nodes, name='list_nodes'),
     path('api/register_node/', views.register_node, name='register_node'),
-    path('api/synchronize_nodes/', views.synchronize_nodes, name='synchronize_nodes'),
+    path('api/synchronize_nodes/', synchronize_nodes, name='synchronize_nodes'),
 
 
 
