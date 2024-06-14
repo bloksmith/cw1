@@ -5580,3 +5580,23 @@ def receive_transaction(request):
 
         return JsonResponse({"status": "Transaction received"})
     return JsonResponse({"error": "Only POST method allowed"}, status=400)
+# views.py on master node
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+
+nodes = []
+
+@csrf_exempt
+@require_POST
+def register_node(request):
+    data = json.loads(request.body)
+    node_url = data.get("url")
+    if node_url and node_url not in nodes:
+        nodes.append(node_url)
+    return JsonResponse({"status": "success", "nodes": nodes})
+
+@csrf_exempt
+def list_nodes(request):
+    return JsonResponse(nodes, safe=False)

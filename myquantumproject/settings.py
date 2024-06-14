@@ -38,8 +38,7 @@ ALLOWED_HOSTS = [
 # myquantumproject/settings.py
 
 MASTER_NODE_URL = "https://app.cashewstable.com"
-CURRENT_NODE_URL = "https://app3.cashewstable.com"
-
+NODE_PORT = 8000  # Or whatever port your node is running on
 
 
 import os

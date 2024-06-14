@@ -1,17 +1,24 @@
 # quantumapp/node_registration.py
 
 import requests
-import os
 import logging
+from django.conf import settings
+import socket
 
 logger = logging.getLogger(__name__)
 
+def get_node_url():
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    port = settings.NODE_PORT
+    return f"http://{local_ip}:{port}"
+
 def register_with_master_node():
-    master_node_url = os.getenv('MASTER_NODE_URL')
-    node_url = os.getenv('NODE_URL')
+    master_node_url = settings.MASTER_NODE_URL
+    node_url = get_node_url()
     
-    if not master_node_url or not node_url:
-        logger.error("MASTER_NODE_URL or NODE_URL environment variables are not set")
+    if not master_node_url:
+        logger.error("MASTER_NODE_URL is not set in settings")
         return
 
     try:
