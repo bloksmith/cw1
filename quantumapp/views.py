@@ -5521,3 +5521,62 @@ def get_network_status(request):
     sync_status = check_node_synchronization()
     print(f"Network status data: {sync_status}")
     return JsonResponse(sync_status)
+
+# views.py
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def list_nodes(request):
+    # This is just an example. You need to implement the logic to return the list of active nodes.
+    nodes = [
+        {"url": "https://app.cashewstable.com"},
+        {"url": "https://app3.cashewstable.com"},
+        # Add more nodes as needed
+    ]
+    return JsonResponse(nodes, safe=False)
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import Transaction
+
+@csrf_exempt
+def get_transaction(request, tx_hash):
+    try:
+        transaction = Transaction.objects.get(hash=tx_hash)
+        data = {
+            "hash": transaction.hash,
+            "sender": transaction.sender.address,
+            "receiver": transaction.receiver.address,
+            "amount": transaction.amount,
+            "fee": transaction.fee,
+            "timestamp": transaction.timestamp.isoformat(),
+            # Add other fields as needed
+        }
+        return JsonResponse(data)
+    except Transaction.DoesNotExist:
+        return JsonResponse({"error": "Transaction not found"}, status=404)
+
+@csrf_exempt
+def receive_transaction(request):
+    if request.method == 'POST':
+        transaction_data = json.loads(request.body)
+        # Logic to save the transaction in your database
+        transaction, created = Transaction.objects.get_or_create(
+            hash=transaction_data['hash'],
+            defaults={
+                'sender': transaction_data['sender'],
+                'receiver': transaction_data['receiver'],
+                'amount': transaction_data['amount'],
+                'fee': transaction_data['fee'],
+                'timestamp': transaction_data['timestamp'],
+                # Add other fields as needed
+            }
+        )
+        if created:
+            # Transaction was created, propagate to other nodes if needed
+            # This can be done asynchronously or in a separate process
+            propagate_transaction(transaction)
+
+        return JsonResponse({"status": "Transaction received"})
+    return JsonResponse({"error": "Only POST method allowed"}, status=400)
