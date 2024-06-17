@@ -183,3 +183,91 @@ def ensure_system_wallet():
         system_wallet.balance = Decimal('1000000000')
         system_wallet.save()
     return system_wallet
+
+class TokenPair(models.Model):
+    NETWORK_CHOICES = [
+        ('ETH_MAINNET', 'Ethereum Mainnet'),
+        ('ETH_SEPOLIA', 'Ethereum Sepolia'),
+        ('ARBITRUM', 'Arbitrum'),
+        ('AVALANCHE', 'Avalanche'),
+        ('BASE', 'Base'),
+        ('BSC', 'Binance Smart Chain'),
+        ('CELO', 'Celo'),
+        ('FANTOM', 'Fantom'),
+        ('OPTIMISM', 'Optimism'),
+        ('POLYGON', 'Polygon'),
+    ]
+
+    name = models.CharField(max_length=255, default='Default Token Pair Name')
+    token1_symbol = models.CharField(max_length=10, default='TKN1')
+    token2_symbol = models.CharField(max_length=10, default='TKN2')
+    token1_address = models.CharField(max_length=42, default='0x0000000000000000000000000000000000000000')
+    token2_address = models.CharField(max_length=42, default='0x0000000000000000000000000000000000000000')
+    from_token = models.CharField(max_length=42, help_text="Address of the from token")
+    to_token = models.CharField(max_length=42, help_text="Address of the to token")
+    active = models.BooleanField(default=True, help_text="Is the token pair actively traded?")
+    trading_enabled = models.BooleanField(default=True, help_text="Can actual buy/sell operations be performed?")
+    buy_token = models.CharField(max_length=42, help_text="Token address for buying", default='0x0000000000000000000000000000000000000000')
+    sell_token = models.CharField(max_length=42, help_text="Token address for selling", default='0x0000000000000000000000000000000000000000')
+    sell_to_address = models.CharField(max_length=42, default='0x826c533770B4Bc53aa6dA31747113595e0032567', help_text="Address to send tokens when selling")
+    buy_to_address = models.CharField(max_length=42, default='0x826c533770B4Bc53aa6dA31747113595e0032567', help_text="Address to send tokens when buying")
+    sell_transaction_data = models.TextField(help_text="Transaction data for selling", blank=True, default='function_data')
+    buy_transaction_data = models.TextField(help_text="Transaction data for buying", blank=True, null=True)
+    use_deep_learning = models.BooleanField(default=False, help_text="Use deep learning models for this pair?")
+    buy_signal = models.BooleanField(default=False, help_text="Indicator for a buy signal")
+    sell_signal = models.BooleanField(default=False, help_text="Indicator for a sell signal")
+    # New fields for sentiment and risk data
+    sentiment_score = models.FloatField(default=0.0, help_text="Sentiment score from analysis")
+    sentiment_summary = models.TextField(blank=True, help_text="Summary of the sentiment analysis")
+    risk_level = models.CharField(max_length=10, default='UNKNOWN', choices=[('LOW', 'Low'), ('MEDIUM', 'Medium'), ('HIGH', 'High')], help_text="Risk level from the latest analysis")
+    last_analyzed = models.DateTimeField(auto_now=True, editable=False)
+    buy_small_amount = models.BooleanField(default=False, help_text="Always buy a small amount regardless of other indicators for cStables/DAI")
+    token11_network = models.CharField(max_length=20, choices=NETWORK_CHOICES, default='POLYGON', help_text="Blockchain network for token1")
+    token22_network = models.CharField(max_length=20, choices=NETWORK_CHOICES, default='POLYGON', help_text="Blockchain network for token2")
+
+    def __str__(self):
+        return f"{self.token1_symbol}/{self.token2_symbol} - {self.name}"
+
+class TokenQuote(models.Model):
+    from_token = models.CharField(max_length=42)
+    to_token = models.CharField(max_length=42)
+    price = models.DecimalField(max_digits=20, decimal_places=10)
+    gross_price = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    estimated_price_impact = models.CharField(max_length=100, null=True)
+    gas_price = models.BigIntegerField(null=True)
+    gas_used = models.BigIntegerField(null=True)
+    sources = models.JSONField(default=dict)
+    created_at = models.DateTimeField()
+    amount = models.DecimalField(max_digits=20, decimal_places=10, null=True, default=None)
+
+    # Technical indicators
+    upper_band = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    lower_band = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    rsi = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    macd = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    rsi_sma = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    signal_line = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    # Additional technical indicators
+    fibonacci_retracement = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+    impulse_macd = models.DecimalField(max_digits=20, decimal_places=10, null=True)
+
+    # Trade signals
+    buy_signal = models.BooleanField(default=False)
+    sell_signal = models.BooleanField(default=False)
+
+    # Sentiment and risk assessment
+    sentiment_score = models.FloatField(default=0.0, help_text="Sentiment score from analysis")
+    sentiment_summary = models.TextField(blank=True, help_text="Summary of the sentiment analysis")
+    risk_level = models.CharField(max_length=10, default='UNKNOWN', choices=[('LOW', 'Low'), ('MEDIUM', 'Medium'), ('HIGH', 'High')], help_text="Risk level from the latest analysis")
+    last_analyzed = models.DateTimeField(default=timezone.now, help_text="Timestamp of the last analysis")
+    volatility = models.FloatField(default=0.0)  # Added volatility field
+    price_difference = models.FloatField(default=0.0)  # Added price difference field
+    realized_profit = models.DecimalField(max_digits=20, decimal_places=10, null=True)  # Ensure this field exists
+
+    def save(self, *args, **kwargs):
+        print(f"Saving TokenQuote instance: {self}")
+        super().save(*args, **kwargs)
+        print(f"TokenQuote instance saved: {self}")
+
+    def __str__(self):
+        return f"{self.from_token} to {self.to_token} at {self.price} on {self.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
