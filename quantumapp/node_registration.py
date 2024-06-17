@@ -1,4 +1,4 @@
-# quantumapp/node_registration.py
+# node_registration.py
 
 import requests
 import logging
@@ -27,3 +27,5 @@ def register_with_master_node():
         logger.info(f"Node registered successfully with master node: {node_url}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Error registering node with master node: {e}")
+        if e.response is not None:
+            logger.error(f"Response: {e.response.text}")

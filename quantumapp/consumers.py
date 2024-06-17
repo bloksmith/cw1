@@ -326,3 +326,419 @@ class DAGConsumer(WebsocketConsumer):
             'dag': dag
         }))
 
+import json
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        logger.debug(f"Attempting WebSocket connection: {self.scope['path']} with headers {self.scope['headers']}")
+        await self.channel_layer.group_add("transactions", self.channel_name)
+        await self.accept()
+        logger.info(f"WebSocket connected: {self.channel_name}")
+
+    async def disconnect(self, close_code):
+        logger.info(f"WebSocket disconnected: {self.channel_name}, code: {close_code}")
+        await self.channel_layer.group_discard("transactions", self.channel_name)
+
+    async def new_transaction(self, event):
+        transaction = event['transaction']
+        logger.debug(f"New transaction event received: {transaction}")
+        await self.send(text_data=json.dumps({
+            'type': 'new_transaction',
+            'transaction': transaction
+        }))
+# consumers.py
+# consumers.py
+from channels.generic.websocket import AsyncWebsocketConsumer
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        self.room_name = 'transactions'
+        self.room_group_name = 'transactions_group'
+        logger.debug("WebSocket connected")
+
+        # Join room group
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name
+        )
+        await self.send(text_data=json.dumps({
+            'message': 'WebSocket connected!'
+        }))
+
+    async def disconnect(self, close_code):
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+        # Leave room group
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        logger.debug("Received message: %s", text_data)
+        if text_data:
+            try:
+                text_data_json = json.loads(text_data)
+                message = text_data_json.get('message', '')
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+            except json.JSONDecodeError:
+                logger.error("Failed to decode JSON: %s", text_data)
+                await self.send(text_data=json.dumps({
+                    'error': 'Invalid JSON received'
+                }))
+        else:
+            logger.warning("Received empty message")
+
+    async def chat_message(self, event):
+        message = event['message']
+        logger.debug("Broadcasting message: %s", message)
+
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps({
+            'message': message
+        }))
+# consumers.py
+from channels.generic.websocket import AsyncWebsocketConsumer
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        self.room_name = 'transactions'
+        self.room_group_name = 'transactions_group'
+        logger.debug("WebSocket connected")
+
+        # Join room group
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name
+        )
+        await self.send(text_data=json.dumps({
+            'message': 'WebSocket connected!'
+        }))
+
+    async def disconnect(self, close_code):
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+        # Leave room group
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        logger.debug("Received message: %s", text_data)
+        if text_data:
+            try:
+                text_data_json = json.loads(text_data)
+                message = text_data_json.get('message', '')
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+            except json.JSONDecodeError:
+                logger.warning("Message is not valid JSON, treating as plain text")
+                message = text_data
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+        else:
+            logger.warning("Received empty message")
+
+    async def chat_message(self, event):
+        message = event['message']
+        logger.debug("Broadcasting message: %s", message)
+
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps({
+            'message': message
+        }))
+from channels.generic.websocket import AsyncWebsocketConsumer
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.room_name = 'transactions'
+        self.room_group_name = 'transactions_group'
+        
+        await self.accept()
+        logger.debug("WebSocket connected")
+
+        # Join room group
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name
+        )
+        await self.send(text_data=json.dumps({
+            'message': 'WebSocket connected!'
+        }))
+
+    async def disconnect(self, close_code):
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+        # Leave room group
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        logger.debug("Received message: %s", text_data)
+        if text_data:
+            try:
+                text_data_json = json.loads(text_data)
+                message = text_data_json.get('message', '')
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+            except json.JSONDecodeError:
+                logger.warning("Message is not valid JSON, treating as plain text")
+                message = text_data
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+        else:
+            logger.warning("Received empty message")
+
+    async def chat_message(self, event):
+        message = event['message']
+        logger.debug("Broadcasting message: %s", message)
+
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps({
+            'message': message
+        }))
+from channels.generic.websocket import AsyncWebsocketConsumer
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        self.room_name = 'transactions'
+        self.room_group_name = 'transactions_group'
+        logger.debug("WebSocket connected")
+
+        # Join room group
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name
+        )
+        await self.send(text_data=json.dumps({
+            'message': 'WebSocket connected!'
+        }))
+
+    async def disconnect(self, close_code):
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+        # Leave room group
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        logger.debug("Received message: %s", text_data)
+        if text_data:
+            try:
+                text_data_json = json.loads(text_data)
+                message = text_data_json.get('message', '')
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+            except json.JSONDecodeError:
+                logger.warning("Message is not valid JSON, treating as plain text")
+                message = text_data
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+        else:
+            logger.warning("Received empty message")
+
+    async def chat_message(self, event):
+        message = event['message']
+        logger.debug("Broadcasting message: %s", message)
+
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps({
+            'message': message
+        }))
+# quantumapp/consumers.py
+import json
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+logger = logging.getLogger(__name__)
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        self.room_name = 'transactions'
+        self.room_group_name = 'transactions_group'
+        logger.debug("WebSocket connected")
+
+        # Join room group
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name
+        )
+        await self.send(text_data=json.dumps({
+            'message': 'WebSocket connected!'
+        }))
+
+    async def disconnect(self, close_code):
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+        # Leave room group
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name
+        )
+
+    async def receive(self, text_data):
+        logger.debug("Received message: %s", text_data)
+        if text_data:
+            try:
+                text_data_json = json.loads(text_data)
+                message = text_data_json.get('message', '')
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+            except json.JSONDecodeError:
+                logger.warning("Message is not valid JSON, treating as plain text")
+                message = text_data
+
+                # Send message to WebSocket
+                await self.send(text_data=json.dumps({
+                    'message': f"Received: {message}"
+                }))
+                logger.debug("Sent response message: %s", message)
+
+                # Broadcast message to group
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        'type': 'chat_message',
+                        'message': message
+                    }
+                )
+        else:
+            logger.warning("Received empty message")
+
+    async def chat_message(self, event):
+        message = event['message']
+        logger.debug("Broadcasting message: %s", message)
+
+        # Send message to WebSocket
+        await self.send(text_data=json.dumps({
+            'message': message
+        }))

@@ -1,5 +1,5 @@
 from django.urls import path, re_path
-from .consumers import TokenConsumer, PoolConsumer, BlockchainConsumer, TransactionConsumer, SyncConsumer, SyncStatusConsumer
+from .consumers import TokenConsumer, PoolConsumer, BlockchainConsumer, TransactionConsumer, SyncConsumer, SyncStatusConsumer, DAGConsumer
 
 websocket_urlpatterns = [
     path('ws/token/', TokenConsumer.as_asgi()),
@@ -9,5 +9,4 @@ websocket_urlpatterns = [
     path('ws/sync/', SyncConsumer.as_asgi()),
     re_path(r'ws/sync_status/$', SyncStatusConsumer.as_asgi()),
     path('ws/dag/', DAGConsumer.as_asgi()),
-
 ]
