@@ -7004,3 +7004,72 @@ def receive_block(request):
             print(f"Error receiving block: {e}")
             return JsonResponse({"status": "error", "message": f"Error receiving block: {e}"}, status=500)
     return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+import requests
+import logging
+from urllib.parse import urljoin
+
+logger = logging.getLogger(__name__)
+
+def fetch_node_data(node_url):
+    try:
+        response = requests.get(urljoin(node_url, "/api/latest_transaction/"))
+        response.raise_for_status()
+        data = response.json()
+        return {"url": node_url, "latest_transaction": data}
+    except requests.RequestException as e:
+        return {"url": node_url, "latest_transaction": None, "error": str(e)}
+
+def get_active_nodes(master_node_url):
+    try:
+        response = requests.get(urljoin(master_node_url, "/api/nodes/"))
+        response.raise_for_status()
+        nodes = response.json()
+        return [{"url": node} for node in nodes]  # Ensure nodes are returned as a list of dictionaries
+    except requests.RequestException as e:
+        logger.error(f"Error fetching nodes from master node: {e}")
+        return []
+
+@csrf_exempt
+def get_network_status(request):
+    sync_status = check_node_synchronization()
+    return JsonResponse(sync_status)
+
+def check_node_synchronization():
+    master_node_url = settings.MASTER_NODE_URL
+    if not master_node_url:
+        return {
+            "is_synchronized": False,
+            "message": "MASTER_NODE_URL is not set in settings",
+        }
+
+    nodes = get_active_nodes(master_node_url)
+
+    if len(nodes) < 2:
+        return {
+            "is_synchronized": False,
+            "message": "Not enough nodes to check synchronization",
+            "nodes": nodes,
+        }
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(fetch_node_data, node['url']) for node in nodes[:2]]
+        results = {future.result()['url']: future.result() for future in as_completed(futures)}
+
+    node_urls = list(results.keys())
+    node1_url = node_urls[0]
+    node2_url = node_urls[1]
+
+    node1_data = results[node1_url]
+    node2_data = results[node2_url]
+
+    is_synchronized = node1_data['latest_transaction'] == node2_data['latest_transaction']
+    return {
+        "is_synchronized": is_synchronized,
+        "node1_latest_transaction": node1_data['latest_transaction'],
+        "node2_latest_transaction": node2_data['latest_transaction'],
+    }
