@@ -352,6 +352,13 @@ def check_node_synchronization():
 def get_network_status(request):
     sync_status = check_node_synchronization()
     return JsonResponse(sync_status)
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from decimal import Decimal
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+from .models import Wallet, Transaction, Shard
 
 @csrf_exempt
 def create_transaction(request):
@@ -394,6 +401,23 @@ def create_transaction(request):
                     message = 'Transaction created but not approved due to validation failure'
             except Exception as e:
                 message = f'Transaction created but approval failed: {str(e)}'
+
+            # Send transaction via WebSocket
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions", {
+                    "type": "new_transaction",
+                    "transaction": {
+                        "sender": sender_address,
+                        "receiver": receiver_address,
+                        "amount": str(amount),
+                        "fee": str(fee),
+                        "hash": transaction.hash,
+                        "timestamp": transaction.timestamp.isoformat(),
+                        "is_approved": transaction.is_approved,
+                    }
+                }
+            )
 
             return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
 
@@ -5556,12 +5580,11 @@ def get_transaction(request, tx_hash):
         return JsonResponse(data)
     except Transaction.DoesNotExist:
         return JsonResponse({"error": "Transaction not found"}, status=404)
-
 @csrf_exempt
+@login_required
 def receive_transaction(request):
     if request.method == 'POST':
         transaction_data = json.loads(request.body)
-        # Logic to save the transaction in your database
         transaction, created = Transaction.objects.get_or_create(
             hash=transaction_data['hash'],
             defaults={
@@ -5570,16 +5593,21 @@ def receive_transaction(request):
                 'amount': transaction_data['amount'],
                 'fee': transaction_data['fee'],
                 'timestamp': transaction_data['timestamp'],
-                # Add other fields as needed
             }
         )
         if created:
-            # Transaction was created, propagate to other nodes if needed
-            # This can be done asynchronously or in a separate process
             propagate_transaction(transaction)
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions", {
+                    "type": "new_transaction",
+                    "transaction": transaction_data,
+                }
+            )
 
         return JsonResponse({"status": "Transaction received"})
     return JsonResponse({"error": "Only POST method allowed"}, status=400)
+
 # views.py on master node
 
 from django.http import JsonResponse
@@ -5665,3 +5693,1317 @@ def check_node_synchronization():
         "node1_latest_transaction": node1_data['latest_transaction'],
         "node2_latest_transaction": node2_data['latest_transaction'],
     }
+import requests
+import numpy as np
+import pandas as pd
+import traceback
+from datetime import datetime
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+import json
+
+# Binance API configuration
+api_key = "Kx5h2OD8OxvMYiFOYJvrw5TDM3uhl8dokCO1oGOKYhTrvEtmd9OHRRwkYcFL2bWy"
+
+def fetch_bitcoin_prices(symbol='BTCUSDT', interval='1d', start_str='1 Jan, 2010', end_str=None, retries=5, delay=5):
+    try:
+        base_url = "https://api.binance.com/api/v3/klines"
+        headers = {
+            'X-MBX-APIKEY': api_key
+        }
+        start_time = int(datetime.strptime(start_str, '%d %b, %Y').timestamp() * 1000)
+        end_time = int(datetime.utcnow().timestamp() * 1000) if end_str is None else int(datetime.strptime(end_str, '%d %b, %Y').timestamp() * 1000)
+        
+        params = {
+            'symbol': symbol,
+            'interval': interval,
+            'startTime': start_time,
+            'endTime': end_time,
+            'limit': 1000  # Maximum limit per request
+        }
+        
+        all_dates = []
+        all_prices = []
+        
+        while True:
+            for attempt in range(retries):
+                response = requests.get(base_url, headers=headers, params=params)
+                data = response.json()
+                if response.status_code == 200:
+                    if not data:
+                        return all_dates, all_prices
+                    dates = [datetime.utcfromtimestamp(int(candle[0]) / 1000).strftime('%Y-%m-%d') for candle in data]
+                    prices = [float(candle[4]) for candle in data]  # Closing price
+                    all_dates.extend(dates)
+                    all_prices.extend(prices)
+                    params['startTime'] = int(data[-1][0]) + 1  # Update startTime to the last timestamp in the returned data
+                    break
+                else:
+                    print(f"Attempt {attempt + 1} failed: {data}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+            else:
+                raise KeyError(f"Failed to fetch data after {retries} attempts.")
+    except Exception as e:
+        print("Error fetching Bitcoin prices:", e)
+        traceback.print_exc()
+        return [], []
+
+# Calculate MACD
+def calculate_macd(prices, slow=26, fast=12, signal=9):
+    prices = pd.Series(prices)
+    fast_ema = prices.ewm(span=fast, min_periods=1).mean()
+    slow_ema = prices.ewm(span=slow, min_periods=1).mean()
+    macd = fast_ema - slow_ema
+    signal_line = macd.ewm(span=signal, min_periods=1).mean()
+    return macd, signal_line
+
+# Calculate MACD200
+def calculate_macd200(prices):
+    return calculate_macd(prices, slow=200, fast=26, signal=9)
+
+# Calculate RSI
+def calculate_rsi(prices, period=14):
+    prices = pd.Series(prices)
+    delta = prices.diff().dropna()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# Calculate Bollinger Bands
+def calculate_bollinger_bands(prices, window=20, no_of_std=2):
+    prices = pd.Series(prices)
+    rolling_mean = prices.rolling(window).mean()
+    rolling_std = prices.rolling(window).std()
+    upper_band = rolling_mean + (rolling_std * no_of_std)
+    lower_band = rolling_mean - (rolling_std * no_of_std)
+    return upper_band, lower_band
+
+# Calculate Fibonacci Retracement Levels
+def calculate_fibonacci_levels(prices):
+    max_price = prices.max()
+    min_price = prices.min()
+    diff = max_price - min_price
+    level_0 = max_price
+    level_236 = max_price - 0.236 * diff
+    level_382 = max_price - 0.382 * diff
+    level_50 = max_price - 0.5 * diff
+    level_618 = max_price - 0.618 * diff
+    level_100 = min_price
+    return level_0, level_236, level_382, level_50, level_618, level_100
+
+# Simple trading strategy using TA indicators
+def ta_strategy(prices, macd, signal_line, macd200, rsi, upper_band, lower_band, fib_levels):
+    actions = []
+    for i in range(len(prices)):
+        action = "Hold"
+        if macd.iloc[i] > signal_line.iloc[i] and rsi.iloc[i] < 70 and prices.iloc[i] < upper_band.iloc[i] and macd200.iloc[i] > 0:
+            action = "Buy"
+        elif macd.iloc[i] < signal_line.iloc[i] and rsi.iloc[i] > 30 and prices.iloc[i] > lower_band.iloc[i] and macd200.iloc[i] < 0:
+            action = "Sell"
+        
+        # Impulsive MACD (strong divergence)
+        if (macd.iloc[i] - signal_line.iloc[i]) > macd.std() and rsi.iloc[i] < 30:
+            action = "Strong Buy"
+        elif (macd.iloc[i] - signal_line.iloc[i]) < -macd.std() and rsi.iloc[i] > 70:
+            action = "Strong Sell"
+        
+        # Fibonacci Retracement Levels
+        if prices.iloc[i] < fib_levels[5]:  # Below 100% retracement
+            action = "Buy"
+        elif prices.iloc[i] > fib_levels[0]:  # Above 0% retracement
+            action = "Sell"
+        
+        actions.append(action)
+    return actions
+
+@csrf_exempt
+def trading_bot_view(request):
+    if request.method == "POST":
+        step = request.POST.get("step")
+        
+        if step == "fetch_data":
+            print("Step: Fetching data...")
+            dates, prices = fetch_bitcoin_prices()
+            if not dates or not prices:
+                return JsonResponse({"status": "failed", "message": "Failed to fetch data"})
+            print(f"Fetched data from {dates[0]} to {dates[-1]}")
+            return JsonResponse({"status": "success", "step": "fetch_data", "dates": dates, "prices": prices, "message": f"Fetched data from {dates[0]} to {dates[-1]}"})
+        
+        elif step == "calculate_indicators":
+            print("Step: Calculating indicators...")
+            prices = request.POST.get("prices")
+            print("Received prices for calculation (raw): ", prices)  # Debugging: Log received prices
+            try:
+                prices = json.loads(prices)  # Convert JSON string to list
+                prices = list(map(float, prices))
+                print("Processed prices for calculation: ", prices)  # Debugging: Log processed prices
+                
+                prices_series = pd.Series(prices)
+                macd, signal_line = calculate_macd(prices_series)
+                macd200, _ = calculate_macd200(prices_series)
+                rsi = calculate_rsi(prices_series).fillna(0)  # Replace NaN with 0 for safe JSON serialization
+                upper_band, lower_band = calculate_bollinger_bands(prices_series)
+                fib_levels = calculate_fibonacci_levels(prices_series)
+                print("Indicators calculated successfully.")
+                
+                # Pad RSI to match the length of the other indicators
+                rsi_list = rsi.tolist()
+                if len(rsi_list) < len(prices):
+                    rsi_list = [None] * (len(prices) - len(rsi_list)) + rsi_list
+                
+                # Replace NaN with None for JSON compatibility
+                response_data = {
+                    "status": "success", 
+                    "step": "calculate_indicators", 
+                    "macd": [x if not pd.isna(x) else None for x in macd.tolist()], 
+                    "signal_line": [x if not pd.isna(x) else None for x in signal_line.tolist()], 
+                    "macd200": [x if not pd.isna(x) else None for x in macd200.tolist()],
+                    "rsi": [x if not pd.isna(x) else None for x in rsi_list], 
+                    "upper_band": [x if not pd.isna(x) else None for x in upper_band.tolist()], 
+                    "lower_band": [x if not pd.isna(x) else None for x in lower_band.tolist()], 
+                    "fib_levels": [x if not pd.isna(x) else None for x in fib_levels]
+                }
+                
+                return JsonResponse(response_data)
+            except Exception as e:
+                print(f"Error calculating indicators: {e}")
+                traceback.print_exc()
+                return JsonResponse({"status": "failed", "message": "Error calculating indicators"})
+        
+        elif step == "apply_strategy":
+            print("Step: Applying strategy...")
+            try:
+                prices = json.loads(request.POST.get("prices"))
+                macd = json.loads(request.POST.get("macd"))
+                signal_line = json.loads(request.POST.get("signal_line"))
+                macd200 = json.loads(request.POST.get("macd200"))
+                rsi = json.loads(request.POST.get("rsi"))
+                upper_band = json.loads(request.POST.get("upper_band"))
+                lower_band = json.loads(request.POST.get("lower_band"))
+                fib_levels = json.loads(request.POST.get("fib_levels"))
+
+                # Verify the length of each list
+                print(f"Length of prices: {len(prices)}")
+                print(f"Length of MACD: {len(macd)}")
+                print(f"Length of signal_line: {len(signal_line)}")
+                print(f"Length of MACD200: {len(macd200)}")
+                print(f"Length of RSI: {len(rsi)}")
+                print(f"Length of upper_band: {len(upper_band)}")
+                print(f"Length of lower_band: {len(lower_band)}")
+
+                if not (len(prices) == len(macd) == len(signal_line) == len(macd200) == len(rsi) == len(upper_band) == len(lower_band)):
+                    raise ValueError("Mismatch in length of input lists")
+
+                print("Received data for strategy application:")
+                print("Prices: ", prices)
+                print("MACD: ", macd)
+                print("Signal Line: ", signal_line)
+                print("MACD200: ", macd200)
+                print("RSI: ", rsi)
+                print("Upper Band: ", upper_band)
+                print("Lower Band: ", lower_band)
+                print("Fib Levels: ", fib_levels)
+
+                # Ensure all lists are the same length
+                min_length = min(len(prices), len(macd), len(signal_line), len(macd200), len(rsi), len(upper_band), len(lower_band))
+                prices_series = pd.Series(prices[:min_length])
+                macd_series = pd.Series(macd[:min_length])
+                signal_line_series = pd.Series(signal_line[:min_length])
+                macd200_series = pd.Series(macd200[:min_length])
+                rsi_series = pd.Series(rsi[:min_length])
+                upper_band_series = pd.Series(upper_band[:min_length])
+                lower_band_series = pd.Series(lower_band[:min_length])
+
+                actions = ta_strategy(prices_series, macd_series, signal_line_series, macd200_series, rsi_series, upper_band_series, lower_band_series, fib_levels)
+                print("Strategy applied successfully.")
+
+                return JsonResponse({"status": "success", "step": "apply_strategy", "actions": actions})
+            except Exception as e:
+                print(f"Error applying strategy: {e}")
+                traceback.print_exc()
+                return JsonResponse({"status": "failed", "message": "Error applying strategy"})
+    
+    return render(request, 'tradingbot.html')
+# views.py
+
+# views.py
+from django.http import JsonResponse
+import requests
+import re
+from decimal import Decimal
+from .models import TokenPair  # Import your model
+
+def fetch_trending_pairs(request):
+    if request.method in ['POST', 'GET']:  # Allow GET for testing
+        queries = request.GET.get('q', 'BTC').split(',')  # Get queries from request or use default
+        network_filter = request.GET.get('network', 'polygon').upper()  # Get network from request or use default
+
+        print(f"Queries: {queries}, Network Filter: {network_filter}")  # Debug log
+
+        fetched_tokens = []
+
+        for query in queries:
+            # Fetch from DexScreener
+            dexscreener_tokens = fetch_dexscreener_pairs(query, network_filter)
+            fetched_tokens.extend(dexscreener_tokens)
+            
+            # Fetch from GeckoTerminal
+            geckoterminal_tokens = fetch_geckoterminal_pairs(query, network_filter)
+            fetched_tokens.extend(geckoterminal_tokens)
+
+        if fetched_tokens:
+            save_fetched_tokens_to_db(fetched_tokens, network_filter)
+            print(f"Fetched and saved tokens: {fetched_tokens}")  # Debug log
+        else:
+            print(f"No tokens fetched for network: {network_filter}")  # Debug log
+
+        return JsonResponse({
+            "status": "success",
+            "message": "Token pairs fetched and saved successfully.",
+            "tokens": fetched_tokens
+        })
+
+    return JsonResponse({"status": "failed", "message": "Invalid request method."})
+
+def fetch_dexscreener_pairs(query, network_filter):
+    base_url = "https://api.dexscreener.com/latest/dex/search"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for pair in data.get('pairs', []):
+        print(f"Processing pair: {pair}")  # Debug log
+
+        chain_network = chain_id_to_network(pair['chainId'])
+        print(f"Pair chainId: {pair['chainId']}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            print(f"Match found for network: {pair['chainId']}")  # Debug log
+            
+            # Validate and convert numerical fields to scientific notation
+            if valid_token_data(pair):
+                fetched_tokens.append({
+                    'name': f"{pair['baseToken']['symbol']}/{pair['quoteToken']['symbol']}",
+                    'token1_symbol': pair['baseToken']['symbol'],
+                    'token2_symbol': pair['quoteToken']['symbol']
+                })
+
+    return fetched_tokens
+
+def fetch_geckoterminal_pairs(query, network_filter):
+    base_url = "https://api.geckoterminal.com/api/v1/tokens"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for token in data.get('data', []):
+        chain_id = token.get('attributes', {}).get('chainId')
+        print(f"GeckoTerminal Chain ID: {chain_id}, Network Filter: {network_filter}")  # Debug log
+
+        chain_network = chain_id_to_network(chain_id)
+        print(f"Token chainId: {chain_id}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            # Validate and convert numerical fields to scientific notation
+            if valid_token_data(token['attributes']):
+                fetched_tokens.append({
+                    'name': f"{token['attributes']['base_token_symbol']}/{token['attributes']['quote_token_symbol']}",
+                    'token1_symbol': token['attributes']['base_token_symbol'],
+                    'token2_symbol': token['attributes']['quote_token_symbol']
+                })
+
+    return fetched_tokens
+
+def chain_id_to_network(chain_id):
+    networks = {
+        'ethereum': 'ETH_MAINNET',
+        'bsc': 'BSC',
+        'polygon': 'POLYGON',
+        'arbitrum': 'ARBITRUM',
+        'avalanche': 'AVALANCHE',
+        'base': 'BASE',
+        'celo': 'CELO',
+        'fantom': 'FANTOM',
+        'optimism': 'OPTIMISM',
+        'scroll': 'SCROLL',
+        'starknet': 'STARKNET',
+        'polygonzkevm': 'POLYGONZKEVM',
+        'cronos': 'CRONOS',
+        'zksync': 'ZKSYNC',
+        'solana': 'SOLANA'  # Ensure all possible chainIds are mapped
+    }
+    mapped_network = networks.get(chain_id.lower(), 'UNKNOWN').upper()  # Ensure case-insensitive mapping
+    print(f"Mapping chainId {chain_id} to network {mapped_network}")  # Debug log
+    return mapped_network
+
+def valid_token_data(data):
+    """
+    Validates the token data and ensures numerical fields are in scientific notation.
+    """
+    # Regex for matching scientific notation
+    scientific_notation_regex = re.compile(r'^-?\d+(\.\d+)?([eE][-+]?\d+)?$')
+    
+    # Validate numerical fields and convert to scientific notation if necessary
+    try:
+        if 'priceNative' in data:
+            data['priceNative'] = format_to_scientific(data['priceNative'])
+        if 'priceUsd' in data:
+            data['priceUsd'] = format_to_scientific(data['priceUsd'])
+        if 'volume' in data:
+            for key in data['volume']:
+                data['volume'][key] = format_to_scientific(data['volume'][key])
+        if 'liquidity' in data:
+            for key in data['liquidity']:
+                data['liquidity'][key] = format_to_scientific(data['liquidity'][key])
+        return True
+    except (ValueError, TypeError) as e:
+        print(f"Data validation/conversion error: {e}")
+        return False
+
+def format_to_scientific(value):
+    """
+    Converts a numerical value to scientific notation.
+    """
+    return f"{Decimal(value):.6E}"
+
+def save_fetched_tokens_to_db(fetched_tokens, network_filter):
+    for token in fetched_tokens:
+        token_pair, created = TokenPair.objects.update_or_create(
+            name=token['name'],
+            defaults={
+                'token1_symbol': token['token1_symbol'],
+                'token2_symbol': token['token2_symbol'],
+                'network': network_filter
+            }
+        )
+        if created:
+            print(f"Created new token pair: {token_pair}")  # Debug log
+        else:
+            print(f"Updated existing token pair: {token_pair}")  # Debug log
+from django.http import JsonResponse
+import requests
+import re
+from decimal import Decimal
+from .models import TokenPair  # Import your model
+
+def fetch_trending_pairs(request):
+    if request.method in ['POST', 'GET']:  # Allow GET for testing
+        queries = request.GET.get('q', 'BTC').split(',')  # Get queries from request or use default
+        network_filter = request.GET.get('network', 'polygon').upper()  # Get network from request or use default
+
+        print(f"Queries: {queries}, Network Filter: {network_filter}")  # Debug log
+
+        fetched_tokens = []
+
+        for query in queries:
+            # Fetch from DexScreener
+            dexscreener_tokens = fetch_dexscreener_pairs(query, network_filter)
+            fetched_tokens.extend(dexscreener_tokens)
+            
+            # Fetch from GeckoTerminal
+            geckoterminal_tokens = fetch_geckoterminal_pairs(query, network_filter)
+            fetched_tokens.extend(geckoterminal_tokens)
+
+        if fetched_tokens:
+            save_fetched_tokens_to_db(fetched_tokens, network_filter)
+            print(f"Fetched and saved tokens: {fetched_tokens}")  # Debug log
+        else:
+            print(f"No tokens fetched for network: {network_filter}")  # Debug log
+
+        return JsonResponse({
+            "status": "success",
+            "message": "Token pairs fetched and saved successfully.",
+            "tokens": fetched_tokens
+        })
+
+    return JsonResponse({"status": "failed", "message": "Invalid request method."})
+
+def fetch_dexscreener_pairs(query, network_filter):
+    base_url = "https://api.dexscreener.com/latest/dex/search"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for pair in data.get('pairs', []):
+        print(f"Processing pair: {pair}")  # Debug log
+
+        chain_network = chain_id_to_network(pair['chainId'])
+        print(f"Pair chainId: {pair['chainId']}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            print(f"Match found for network: {pair['chainId']}")  # Debug log
+            
+            # Validate and convert numerical fields to scientific notation
+            if valid_token_data(pair):
+                fetched_tokens.append({
+                    'name': f"{pair['baseToken']['symbol']}/{pair['quoteToken']['symbol']}",
+                    'token1_symbol': pair['baseToken']['symbol'],
+                    'token2_symbol': pair['quoteToken']['symbol']
+                })
+
+    return fetched_tokens
+
+def fetch_geckoterminal_pairs(query, network_filter):
+    base_url = "https://api.geckoterminal.com/api/v1/tokens"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for token in data.get('data', []):
+        chain_id = token.get('attributes', {}).get('chainId')
+        print(f"GeckoTerminal Chain ID: {chain_id}, Network Filter: {network_filter}")  # Debug log
+
+        chain_network = chain_id_to_network(chain_id)
+        print(f"Token chainId: {chain_id}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            # Validate and convert numerical fields to scientific notation
+            if valid_token_data(token['attributes']):
+                fetched_tokens.append({
+                    'name': f"{token['attributes']['base_token_symbol']}/{token['attributes']['quote_token_symbol']}",
+                    'token1_symbol': token['attributes']['base_token_symbol'],
+                    'token2_symbol': token['attributes']['quote_token_symbol']
+                })
+
+    return fetched_tokens
+
+def chain_id_to_network(chain_id):
+    networks = {
+        'ethereum': 'ETH_MAINNET',
+        'bsc': 'BSC',
+        'polygon': 'POLYGON',
+        'arbitrum': 'ARBITRUM',
+        'avalanche': 'AVALANCHE',
+        'base': 'BASE',
+        'celo': 'CELO',
+        'fantom': 'FANTOM',
+        'optimism': 'OPTIMISM',
+        'scroll': 'SCROLL',
+        'starknet': 'STARKNET',
+        'polygonzkevm': 'POLYGONZKEVM',
+        'cronos': 'CRONOS',
+        'zksync': 'ZKSYNC',
+        'solana': 'SOLANA'  # Ensure all possible chainIds are mapped
+    }
+    mapped_network = networks.get(chain_id.lower(), 'UNKNOWN').upper()  # Ensure case-insensitive mapping
+    print(f"Mapping chainId {chain_id} to network {mapped_network}")  # Debug log
+    return mapped_network
+
+def valid_token_data(data):
+    """
+    Validates the token data and ensures numerical fields are in scientific notation.
+    """
+    # Regex for matching scientific notation
+    scientific_notation_regex = re.compile(r'^-?\d+(\.\d+)?([eE][-+]?\d+)?$')
+    
+    # Validate numerical fields and convert to scientific notation if necessary
+    try:
+        if 'priceNative' in data:
+            data['priceNative'] = format_to_scientific(data['priceNative'])
+        if 'priceUsd' in data:
+            data['priceUsd'] = format_to_scientific(data['priceUsd'])
+        if 'volume' in data:
+            for key in data['volume']:
+                data['volume'][key] = format_to_scientific(data['volume'][key])
+        if 'liquidity' in data:
+            for key in data['liquidity']:
+                data['liquidity'][key] = format_to_scientific(data['liquidity'][key])
+        return True
+    except (ValueError, TypeError) as e:
+        print(f"Data validation/conversion error: {e}")
+        return False
+
+def format_to_scientific(value):
+    """
+    Converts a numerical value to scientific notation.
+    """
+    return f"{Decimal(value):.6E}"
+
+def save_fetched_tokens_to_db(fetched_tokens, network_filter):
+    for token in fetched_tokens:
+        token_pair, created = TokenPair.objects.update_or_create(
+            name=token['name'],
+            defaults={
+                'token1_symbol': token['token1_symbol'],
+                'token2_symbol': token['token2_symbol'],
+                'network': network_filter
+            }
+        )
+        if created:
+            print(f"Created new token pair: {token_pair}")  # Debug log
+        else:
+            print(f"Updated existing token pair: {token_pair}")  # Debug log
+from django.http import JsonResponse
+import requests
+from .models import TokenPair  # Import your model
+
+def fetch_trending_pairs(request):
+    if request.method in ['POST', 'GET']:  # Allow GET for testing
+        queries = request.GET.get('q', 'BTC').split(',')  # Get queries from request or use default
+        network_filter = request.GET.get('network', 'polygon').upper()  # Get network from request or use default
+
+        print(f"Queries: {queries}, Network Filter: {network_filter}")  # Debug log
+
+        fetched_tokens = []
+
+        for query in queries:
+            # Fetch from DexScreener
+            dexscreener_tokens = fetch_dexscreener_pairs(query, network_filter)
+            fetched_tokens.extend(dexscreener_tokens)
+            
+            # Fetch from GeckoTerminal
+            geckoterminal_tokens = fetch_geckoterminal_pairs(query, network_filter)
+            fetched_tokens.extend(geckoterminal_tokens)
+
+        if fetched_tokens:
+            save_fetched_tokens_to_db(fetched_tokens, network_filter)
+            print(f"Fetched and saved tokens: {fetched_tokens}")  # Debug log
+        else:
+            print(f"No tokens fetched for network: {network_filter}")  # Debug log
+
+        return JsonResponse({
+            "status": "success",
+            "message": "Token pairs fetched and saved successfully.",
+            "tokens": fetched_tokens
+        })
+
+    return JsonResponse({"status": "failed", "message": "Invalid request method."})
+
+def fetch_dexscreener_pairs(query, network_filter):
+    base_url = "https://api.dexscreener.com/latest/dex/search"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for pair in data.get('pairs', []):
+        print(f"Processing pair: {pair}")  # Debug log
+
+        chain_network = chain_id_to_network(pair['chainId'])
+        print(f"Pair chainId: {pair['chainId']}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            print(f"Match found for network: {pair['chainId']}")  # Debug log
+            fetched_tokens.append({
+                'name': f"{pair['baseToken']['symbol']}/{pair['quoteToken']['symbol']}",
+                'token1_symbol': pair['baseToken']['symbol'],
+                'token2_symbol': pair['quoteToken']['symbol']
+            })
+
+    return fetched_tokens
+
+def fetch_geckoterminal_pairs(query, network_filter):
+    base_url = "https://api.geckoterminal.com/api/v1/tokens"
+    response = requests.get(base_url, params={'q': query})
+    response.raise_for_status()
+    data = response.json()
+
+    fetched_tokens = []
+
+    for token in data.get('data', []):
+        chain_id = token.get('attributes', {}).get('chainId')
+        print(f"GeckoTerminal Chain ID: {chain_id}, Network Filter: {network_filter}")  # Debug log
+
+        chain_network = chain_id_to_network(chain_id)
+        print(f"Token chainId: {chain_id}, Mapped Network: {chain_network}, Network Filter: {network_filter}")  # Debug log
+
+        if chain_network == network_filter:
+            fetched_tokens.append({
+                'name': f"{token['attributes']['base_token_symbol']}/{token['attributes']['quote_token_symbol']}",
+                'token1_symbol': token['attributes']['base_token_symbol'],
+                'token2_symbol': token['attributes']['quote_token_symbol']
+            })
+
+    return fetched_tokens
+
+def chain_id_to_network(chain_id):
+    networks = {
+        'ethereum': 'ETH_MAINNET',
+        'bsc': 'BSC',
+        'polygon': 'POLYGON',
+        'arbitrum': 'ARBITRUM',
+        'avalanche': 'AVALANCHE',
+        'base': 'BASE',
+        'celo': 'CELO',
+        'fantom': 'FANTOM',
+        'optimism': 'OPTIMISM',
+        'scroll': 'SCROLL',
+        'starknet': 'STARKNET',
+        'polygonzkevm': 'POLYGONZKEVM',
+        'cronos': 'CRONOS',
+        'zksync': 'ZKSYNC',
+        'solana': 'SOLANA'  # Ensure all possible chainIds are mapped
+    }
+    mapped_network = networks.get(chain_id.lower(), 'UNKNOWN').upper()  # Ensure case-insensitive mapping
+    print(f"Mapping chainId {chain_id} to network {mapped_network}")  # Debug log
+    return mapped_network
+
+def save_fetched_tokens_to_db(fetched_tokens, network_filter):
+    for token in fetched_tokens:
+        try:
+            token_pair, created = TokenPair.objects.update_or_create(
+                name=token['name'],
+                defaults={
+                    'token1_symbol': token['token1_symbol'],
+                    'token2_symbol': token['token2_symbol'],
+                    'network': network_filter
+                }
+            )
+            if created:
+                print(f"Created new token pair: {token_pair}")  # Debug log
+            else:
+                print(f"Updated existing token pair: {token_pair}")  # Debug log
+        except Exception as e:
+            print(f"Error saving token pair {token['name']}: {e}")  # Debug log
+# views.py
+
+# views.py
+
+import requests
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import TokenPair
+
+@csrf_exempt
+def fetch_token_pairs(request):
+    if request.method in ['POST', 'GET']:  # Allow GET for testing
+        base_url = "https://api.dexscreener.com/latest/dex/search"
+        queries = ['WMATIC', 'USDT', 'DAI', 'USDC', 'ETH', 'BTC', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'UNI', 'LINK']  # Expanded token symbols to search for
+
+        try:
+            for query in queries:
+                response = requests.get(base_url, params={'q': query})
+                response.raise_for_status()
+                data = response.json()
+
+                token_pairs = data.get('pairs', [])
+                for pair in token_pairs:
+                    if pair['chainId'] == 'polygon':  # Filter for Polygon network
+                        network = chain_id_to_network(pair['chainId'])
+
+                        TokenPair.objects.update_or_create(
+                            name=f"{pair['baseToken']['symbol']}/{pair['quoteToken']['symbol']}",
+                            defaults={
+                                'token1_symbol': pair['baseToken']['symbol'],
+                                'token2_symbol': pair['quoteToken']['symbol'],
+                                'token1_address': pair['baseToken']['address'],
+                                'token2_address': pair['pairAddress'],
+                                'from_token': pair['baseToken']['address'],
+                                'to_token': pair['quoteToken']['address'],
+                                'active': True,
+                                'trading_enabled': True,
+                                'buy_token': pair['baseToken']['address'],
+                                'sell_token': pair['pairAddress'],
+                                'sell_to_address': pair['pairAddress'],
+                                'buy_to_address': pair['pairAddress'],
+                                'sell_transaction_data': '',
+                                'buy_transaction_data': '',
+                                'use_deep_learning': False,
+                                'buy_signal': False,
+                                'sell_signal': False,
+                                'sentiment_score': 0.0,
+                                'sentiment_summary': '',
+                                'risk_level': 'UNKNOWN',
+                                'buy_small_amount': False,
+                                'token11_network': network,
+                                'token22_network': network,
+                            }
+                        )
+
+            return JsonResponse({"status": "success", "message": "Token pairs fetched and saved successfully."})
+
+        except requests.RequestException as e:
+            return JsonResponse({"status": "failed", "message": str(e)})
+    else:
+        return JsonResponse({"status": "failed", "message": "Invalid request method."})
+
+def chain_id_to_network(chain_id):
+    networks = {
+        'ethereum': 'ETH_MAINNET',
+        'bsc': 'BSC',
+        'polygon': 'POLYGON',
+        'arbitrum': 'ARBITRUM',
+        'avalanche': 'AVALANCHE',
+        'base': 'BASE',
+        'celo': 'CELO',
+        'fantom': 'FANTOM',
+        'optimism': 'OPTIMISM',
+    }
+    return networks.get(chain_id, 'UNKNOWN')
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
+from django.utils import timezone
+from .models import Wallet, Shard, Transaction
+from decimal import Decimal
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+import json
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            sender_address = request.POST.get('sender')
+            receiver_address = request.POST.get('receiver')
+            amount = Decimal(request.POST.get('amount'))
+            fee = Decimal(request.POST.get('fee'))
+
+            if not sender_address or not receiver_address or not amount or not fee:
+                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()  # Assuming you have at least one shard
+
+            if sender.balance < (amount + fee):
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction = Transaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                timestamp=timezone.now(),
+                shard=shard,
+                is_approved=False  # Transaction starts as not approved
+            )
+            transaction.hash = transaction.create_hash()
+            transaction.signature = "simulated_signature"  # You should replace this with actual signature logic
+            transaction.save()
+
+            # Attempt to approve the transaction immediately
+            try:
+                if validate_transaction(transaction):
+                    approve_transaction(transaction)
+                    message = 'Transaction created and approved'
+                else:
+                    message = 'Transaction created but not approved due to validation failure'
+            except Exception as e:
+                message = f'Transaction created but approval failed: {str(e)}'
+
+            # Send WebSocket message
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions_group",
+                {
+                    "type": "chat_message",
+                    "message": json.dumps({
+                        "transaction_hash": transaction.hash,
+                        "sender": sender_address,
+                        "receiver": receiver_address,
+                        "amount": str(amount),
+                        "fee": str(fee),
+                        "timestamp": transaction.timestamp.isoformat(),
+                        "is_approved": transaction.is_approved
+                    })
+                }
+            )
+
+            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+        except Wallet.DoesNotExist:
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            sender_address = request.POST.get('sender')
+            receiver_address = request.POST.get('receiver')
+            amount = Decimal(request.POST.get('amount'))
+            fee = Decimal(request.POST.get('fee'))
+
+            if not sender_address or not receiver_address or not amount or not fee:
+                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()  # Assuming you have at least one shard
+
+            if sender.balance < (amount + fee):
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction = Transaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                timestamp=timezone.now(),
+                shard=shard,
+                is_approved=False  # Transaction starts as not approved
+            )
+            transaction.hash = transaction.create_hash()
+            transaction.signature = "simulated_signature"  # You should replace this with actual signature logic
+            transaction.save()
+
+            # Attempt to approve the transaction immediately
+            try:
+                if validate_transaction(transaction):
+                    approve_transaction(transaction)
+                    message = 'Transaction created and approved'
+                else:
+                    message = 'Transaction created but not approved due to validation failure'
+            except Exception as e:
+                message = f'Transaction created but approval failed: {str(e)}'
+
+            # Prepare transaction data to broadcast
+            transaction_data = {
+                'transaction_hash': transaction.hash,
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'timestamp': transaction.timestamp.isoformat(),
+                'is_approved': transaction.is_approved,
+            }
+
+            # Broadcast the new transaction to the WebSocket group
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions_group", {
+                    "type": "chat_message",
+                    "message": json.dumps(transaction_data)
+                }
+            )
+
+            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+        except Wallet.DoesNotExist:
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+import requests
+
+def broadcast_transaction(transaction):
+    nodes = get_active_nodes()
+    for node in nodes:
+        try:
+            response = requests.post(f"{node['url']}/api/receive_transaction/", json=transaction)
+            response.raise_for_status()
+            print(f"Transaction {transaction['hash']} broadcasted to {node['url']}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error broadcasting transaction to {node['url']}: {e}")
+
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        print("Shard not found")
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    for transaction in transactions:
+        print(f"Validating transaction {transaction.hash}")
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            print(f"Transaction {transaction.hash} approved. Fee: {transaction.fee}")
+
+            # Broadcast the approved transaction
+            transaction_data = {
+                'transaction_hash': transaction.hash,
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'timestamp': transaction.timestamp.isoformat(),
+                'is_approved': transaction.is_approved
+            }
+            broadcast_transaction(transaction_data)
+
+        else:
+            print(f"Transaction {transaction.hash} was not approved")
+
+    # ... rest of the code remains unchanged ...
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def receive_transaction(request):
+    if request.method == 'POST':
+        try:
+            transaction_data = json.loads(request.body)
+            transaction, created = Transaction.objects.get_or_create(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': Wallet.objects.get(address=transaction_data['sender']),
+                    'receiver': Wallet.objects.get(address=transaction_data['receiver']),
+                    'amount': Decimal(transaction_data['amount']),
+                    'fee': Decimal(transaction_data['fee']),
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved']
+                }
+            )
+            if created:
+                print(f"Transaction {transaction.hash} received and created.")
+                return JsonResponse({"status": "success", "message": "Transaction received and created"})
+            else:
+                print(f"Transaction {transaction.hash} already exists.")
+                return JsonResponse({"status": "success", "message": "Transaction already exists"})
+        except Exception as e:
+            print(f"Error receiving transaction: {e}")
+            return JsonResponse({"status": "error", "message": f"Error receiving transaction: {e}"}, status=500)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        print("Shard not found")
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    for transaction in transactions:
+        print(f"Validating transaction {transaction.hash}")
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            print(f"Transaction {transaction.hash} approved. Fee: {transaction.fee}")
+            approved_transactions.append(transaction)
+        else:
+            print(f"Transaction {transaction.hash} was not approved")
+
+    print(f"Total fees from approved transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+
+    print(f"Calculated block reward: {block_reward}")
+    print(f"Total reward (block reward + total fees): {total_reward}")
+
+    # Calculate current supply excluding the system wallet
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    print(f"Current supply: {current_supply}")
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+        print(f"Adjusted total reward due to supply cap: {total_reward}")
+        print(f"Adjusted block reward due to supply cap: {block_reward}")
+
+    if total_reward <= 0:
+        print(f"No reward due to supply cap. Skipping block mining.")
+        return JsonResponse({
+            'message': 'No reward due to supply cap. Skipping block mining.',
+            'proof': proof,
+            'reward': 0,
+            'fees': total_fees,
+            'total_reward': 0
+        })
+
+    print(f"Before mining, miner wallet balance: {miner_wallet.balance}")
+    print(f"System wallet balance: {system_wallet.balance}")
+    print(f"Final Block Reward: {block_reward}, Total Fees: {total_fees}, Total Reward: {total_reward}")
+
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    print(f"After mining, miner wallet balance: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    dag[new_block_hash] = new_block
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+
+    print(f"Reward Transaction Amount: {reward_transaction.amount}, Fee: {reward_transaction.fee}")
+
+    # Broadcast approved transactions
+    for transaction in approved_transactions:
+        transaction_data = {
+            'transaction_hash': transaction.hash,
+            'sender': transaction.sender.address,
+            'receiver': transaction.receiver.address,
+            'amount': str(transaction.amount),
+            'fee': str(transaction.fee),
+            'timestamp': transaction.timestamp.isoformat(),
+            'is_approved': transaction.is_approved
+        }
+        broadcast_transaction(transaction_data)
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    print(f"Mined block. Hashrate: {mining_statistics['hashrate']}, Blocks Mined: {mining_statistics['blocks_mined']}, Total Rewards: {mining_statistics['total_rewards']}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    print(f"Ordered Blocks: {[block.hash for block in ordered_blocks]}")
+    print(f"Well Connected Subset: {[block.hash for block in well_connected_subset]}")
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+
+    return JsonResponse({
+        'message': f'Block mined successfully in shard {shard.name}',
+        'proof': proof,
+        'reward': block_reward,
+        'fees': total_fees,
+        'total_reward': total_reward
+    })
+@csrf_exempt
+def receive_transaction(request):
+    if request.method == 'POST':
+        try:
+            transaction_data = json.loads(request.body)
+            sender_wallet = Wallet.objects.get(address=transaction_data['sender'])
+            receiver_wallet = Wallet.objects.get(address=transaction_data['receiver'])
+
+            transaction, created = Transaction.objects.get_or_create(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': sender_wallet,
+                    'receiver': receiver_wallet,
+                    'amount': Decimal(transaction_data['amount']),
+                    'fee': Decimal(transaction_data['fee']),
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved']
+                }
+            )
+
+            if created:
+                print(f"Transaction {transaction.hash} received and created.")
+                return JsonResponse({"status": "success", "message": "Transaction received and created"})
+            else:
+                print(f"Transaction {transaction.hash} already exists.")
+                return JsonResponse({"status": "success", "message": "Transaction already exists"})
+        except Exception as e:
+            print(f"Error receiving transaction: {e}")
+            return JsonResponse({"status": "error", "message": f"Error receiving transaction: {e}"}, status=500)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+import json
+
+def broadcast_transaction(transaction_data):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "transactions_group", {
+            "type": "chat_message",
+            "message": json.dumps(transaction_data)
+        }
+    )
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        print("Shard not found")
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    for transaction in transactions:
+        print(f"Validating transaction {transaction.hash}")
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            print(f"Transaction {transaction.hash} approved. Fee: {transaction.fee}")
+            approved_transactions.append(transaction)
+        else:
+            print(f"Transaction {transaction.hash} was not approved")
+
+    print(f"Total fees from approved transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+
+    print(f"Calculated block reward: {block_reward}")
+    print(f"Total reward (block reward + total fees): {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    print(f"Current supply: {current_supply}")
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+        print(f"Adjusted total reward due to supply cap: {total_reward}")
+        print(f"Adjusted block reward due to supply cap: {block_reward}")
+
+    if total_reward <= 0:
+        print(f"No reward due to supply cap. Skipping block mining.")
+        return JsonResponse({
+            'message': 'No reward due to supply cap. Skipping block mining.',
+            'proof': proof,
+            'reward': 0,
+            'fees': total_fees,
+            'total_reward': 0
+        })
+
+    print(f"Before mining, miner wallet balance: {miner_wallet.balance}")
+    print(f"System wallet balance: {system_wallet.balance}")
+    print(f"Final Block Reward: {block_reward}, Total Fees: {total_fees}, Total Reward: {total_reward}")
+
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    print(f"After mining, miner wallet balance: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    dag[new_block_hash] = new_block
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+
+    print(f"Reward Transaction Amount: {reward_transaction.amount}, Fee: {reward_transaction.fee}")
+
+    # Broadcast approved transactions and reward transaction
+    channel_layer = get_channel_layer()
+    for transaction in approved_transactions:
+        transaction_data = {
+            'transaction_hash': transaction.hash,
+            'sender': transaction.sender.address,
+            'receiver': transaction.receiver.address,
+            'amount': str(transaction.amount),
+            'fee': str(transaction.fee),
+            'timestamp': transaction.timestamp.isoformat(),
+            'is_approved': transaction.is_approved
+        }
+        async_to_sync(channel_layer.group_send)(
+            "transactions_group", {
+                "type": "chat_message",
+                "message": json.dumps(transaction_data)
+            }
+        )
+
+    reward_transaction_data = {
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    }
+    async_to_sync(channel_layer.group_send)(
+        "transactions_group", {
+            "type": "chat_message",
+            "message": json.dumps(reward_transaction_data)
+        }
+    )
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    print(f"Mined block. Hashrate: {mining_statistics['hashrate']}, Blocks Mined: {mining_statistics['blocks_mined']}, Total Rewards: {mining_statistics['total_rewards']}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    print(f"Ordered Blocks: {[block.hash for block in ordered_blocks]}")
+    print(f"Well Connected Subset: {[block.hash for block in well_connected_subset]}")
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+
+    return JsonResponse({
+        'message': f'Block mined successfully in shard {shard.name}',
+        'proof': proof,
+        'reward': block_reward,
+        'fees': total_fees,
+        'total_reward': total_reward
+    })
+def synchronize_block_with_other_nodes(block_data):
+    active_nodes = get_active_nodes()
+    for node in active_nodes:
+        if node['url'] != os.getenv('CURRENT_NODE_URL'):
+            try:
+                response = requests.post(f"{node['url']}/api/receive_block/", json=block_data)
+                if response.status_code == 200:
+                    print(f"Block synchronized with {node['url']}")
+                else:
+                    print(f"Failed to synchronize block with {node['url']}")
+            except Exception as e:
+                print(f"Error synchronizing block with {node['url']}: {e}")
+@csrf_exempt
+def receive_block(request):
+    if request.method == 'POST':
+        try:
+            block_data = json.loads(request.body)
+            block_hash = block_data['block_hash']
+            previous_hash = block_data['previous_hash']
+            timestamp = timezone.datetime.fromisoformat(block_data['timestamp'])
+            transactions = block_data['transactions']
+            proof = block_data['proof']
+
+            # Create a new block and save it
+            new_block = Block(hash=block_hash, previous_hash=previous_hash, timestamp=timestamp)
+            dag[new_block_hash] = new_block
+            if previous_hash in dag:
+                dag[previous_hash].children.append(new_block)
+
+            # Mark transactions as approved
+            for tx_hash in transactions:
+                try:
+                    transaction = Transaction.objects.get(hash=tx_hash)
+                    transaction.is_approved = True
+                    transaction.save()
+                except Transaction.DoesNotExist:
+                    print(f"Transaction {tx_hash} not found")
+
+            return JsonResponse({"status": "success", "message": "Block received and processed"})
+        except Exception as e:
+            print(f"Error receiving block: {e}")
+            return JsonResponse({"status": "error", "message": f"Error receiving block: {e}"}, status=500)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)

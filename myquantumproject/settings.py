@@ -11,10 +11,12 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
 from pathlib import Path
-import os 
+import os
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
@@ -25,6 +27,7 @@ SECRET_KEY = 'django-insecure-2=$#0acnlz$wh!1-o888amt(f=_-(g-^t!z(pn6bb04zh65xtp
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 APPEND_SLASH = False
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 20000
 
 ALLOWED_HOSTS = [
     '161.35.219.10',
@@ -32,20 +35,16 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     'app.cashewstable.com',
     'cashewstable.com',
-    'app2.cashewstable.com'
+    'app2.cashewstable.com',
+    'app3.cashewstable.com',
+    '*'
 ]
-
-# myquantumproject/settings.py
-
-MASTER_NODE_URL = "https://app.cashewstable.com"
-NODE_PORT = 1010  # Or whatever port your node is running on
-
+# settings.py
 
 import os
-from pathlib import Path
-from cryptography.fernet import Fernet
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+MASTER_NODE_URL = os.getenv('MASTER_NODE_URL', 'http://app.cashewstable.com')
+CURRENT_NODE_URL = os.getenv('CURRENT_NODE_URL', 'http://localhost:8000')  # Change localhost and port as needed
 
 # Define the path to the encryption key file
 key_path = BASE_DIR / 'secret.key'
@@ -56,15 +55,12 @@ def load_key():
     with open(key_path, 'rb') as key_file:
         return key_file.read()
 
-# Load the encryption key
-ENCRYPTION_KEY = load_key()
-
-# Ensure the key is a valid Fernet key
-if len(ENCRYPTION_KEY) != 44:
-    raise ValueError("Invalid Fernet key length")
-
-# Optional: Set the encryption key as an environment variable
-os.environ['ENCRYPTION_KEY'] = ENCRYPTION_KEY.decode()
+# Load the encryption key and set it as an environment variable
+try:
+    ENCRYPTION_KEY = load_key()
+    os.environ['ENCRYPTION_KEY'] = ENCRYPTION_KEY.decode()
+except Exception as e:
+    print(f"Failed to load encryption key: {e}")
 
 LOGGING = {
     'version': 1,
@@ -82,28 +78,27 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': True,
         },
+        'myquantumproject': {
+            'handlers': ['file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'channels': {
+            'handlers': ['file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
     },
 }
-
 
 LOGIN_URL = '/accounts/login/'
 
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
-# settings.py
 GETH_NODE_URL = 'http://127.0.0.1:32773'  # Your local Geth node URL
 
-
-# settings.py
-
-import os
-
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/3.2/howto/static-files/
-
-
-# Static files directory
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # This should be the path to where static files are collected
 
@@ -112,17 +107,15 @@ AUTHENTICATION_BACKENDS = [
     'quantumapp.backends.PublicKeyBackend',  # your custom backend
 ]
 
-# settings.py
-
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
     'quantumapp',
     'channels',
-    'django_apscheduler',  # Add this line
-
+    'django_apscheduler',
+    'corsheaders',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -133,14 +126,16 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'quantumapp.middleware.CustomOriginMiddleware',  # Add this middleware
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'quantumapp.middleware.CustomHeaderMiddleware',  # Add your custom middleware here
-
 ]
+
+CORS_ALLOW_ALL_ORIGINS = True  # This allows all origins, but you can restrict it to specific domains if needed
 
 ROOT_URLCONF = 'myquantumproject.urls'
 
@@ -162,10 +157,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'myquantumproject.wsgi.application'
 
-
 # Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -173,10 +165,7 @@ DATABASES = {
     }
 }
 
-
 # Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -192,35 +181,56 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
-# https://docs.djangoproject.com/en/5.0/topics/i18n/
-
 LANGUAGE_CODE = 'en-us'
-
 TIME_ZONE = 'UTC'
-
 USE_I18N = True
-
 USE_TZ = True
 
-
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.0/howto/static-files/
-
-
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
-# https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
 ASGI_APPLICATION = 'myquantumproject.asgi.application'
 
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [("127.0.0.1", 6379)],
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+        },
+        'file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'debug.log'),
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'myquantumproject': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'channels': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': True,
         },
     },
 }
