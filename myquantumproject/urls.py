@@ -3,7 +3,7 @@ from django.urls import path
 from quantumapp import views
 from django.conf import settings
 from django.conf.urls.static import static
-from quantumapp.sync_utils import synchronize_nodes  # Import synchronize_nodes from quantumapp.sync_utils
+from quantumapp.sync_utils import synchronize_nodes
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
@@ -20,7 +20,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('get_wallet_aliases/', views.get_wallet_aliases, name='get_wallet_aliases'),
     path('get_wallet_details/', views.get_wallet_details, name='get_wallet_details'),
-    path('join_pool/<uuid:pool_id>/', views.join_pool, name='join_pool'),  # Updated to accept UUID pool_id
+    path('join_pool/<uuid:pool_id>/', views.join_pool, name='join_pool'),  # UUID pool_id
     path('receive_transaction/', views.receive_transaction_view, name='receive_transaction'),
     path('api/latest_transaction/', views.latest_transaction, name='latest_transaction'),
     path('api/transaction_pool/', views.transaction_pool, name='transaction_pool'),
@@ -31,7 +31,6 @@ urlpatterns = [
     path('deploy_contract/', views.deploy_contract, name='deploy_contract'),
     path('get_token_details/', views.get_token_details, name='get_token_details'),
     path('market/', views.market_view, name='market'),
-    path('tradingbot/', views.trading_bot_view, name='trading_bot'),  # Correct the name here
     path('get_transaction_data/', views.get_transaction_data, name='get_transaction_data'),
     path('get_node_data/', views.get_node_data, name='get_node_data'),
     path('fetch_token_details/', views.fetch_token_details, name='fetch_token_details'),
@@ -42,8 +41,9 @@ urlpatterns = [
     path('api/nodes/', views.list_nodes, name='list_nodes'),
     path('api/register_node/', views.register_node, name='register_node'),
     path('api/synchronize_nodes/', synchronize_nodes, name='synchronize_nodes'),
-
-
-
+    path('tradingbot/', views.trading_bot_view, name='tradingbot'),
+    path('fetch-trending-pairs/', views.fetch_trending_pairs, name='fetch_token_pairs'),
+    path('fetch-token-pairs/', views.fetch_token_pairs, name='fetch_token_pairs'),
+    path('api/receive_block/', views.receive_block, name='receive_block'),
 
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

@@ -5625,9 +5625,6 @@ def register_node(request):
         nodes.append(node_url)
     return JsonResponse({"status": "success", "nodes": nodes})
 
-@csrf_exempt
-def list_nodes(request):
-    return JsonResponse(nodes, safe=False)
     
 import requests
 import logging
