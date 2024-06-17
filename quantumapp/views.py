@@ -7008,16 +7008,16 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
 import requests
 import logging
 from urllib.parse import urljoin
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 def fetch_node_data(node_url):
     try:
-        response = requests.get(urljoin(node_url, "/api/latest_transaction/"))
+        response = requests.get(urljoin(str(node_url), "/api/latest_transaction/"))
         response.raise_for_status()
         data = response.json()
         return {"url": node_url, "latest_transaction": data}
@@ -7026,7 +7026,7 @@ def fetch_node_data(node_url):
 
 def get_active_nodes(master_node_url):
     try:
-        response = requests.get(urljoin(master_node_url, "/api/nodes/"))
+        response = requests.get(urljoin(str(master_node_url), "/api/nodes/"))
         response.raise_for_status()
         nodes = response.json()
         return [{"url": node} for node in nodes]  # Ensure nodes are returned as a list of dictionaries
@@ -7040,11 +7040,11 @@ def get_network_status(request):
     return JsonResponse(sync_status)
 
 def check_node_synchronization():
-    master_node_url = settings.MASTER_NODE_URL
+    master_node_url = getattr(settings, 'MASTER_NODE_URL', None)
     if not master_node_url:
         return {
             "is_synchronized": False,
-            "message": "MASTER_NODE_URL is not set in settings",
+            "message": "MASTER_NODE_URL setting is not set",
         }
 
     nodes = get_active_nodes(master_node_url)
