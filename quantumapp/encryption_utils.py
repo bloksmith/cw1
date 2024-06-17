@@ -101,7 +101,74 @@ import logging
 logger = logging.getLogger(__name__)
 
 def load_key():
-    key_path = '/home/myuser/myquantumproject/secret.key'
+    key_path = 'secret.key'
+    if os.path.exists(key_path):
+        with open(key_path, 'rb') as key_file:
+            key = key_file.read()
+            logger.debug(f"Loaded encryption key from {key_path}: {key}")
+            return key
+    else:
+        key = Fernet.generate_key()
+        with open(key_path, 'wb') as key_file:
+            key_file.write(key)
+        logger.debug(f"Generated and saved new encryption key to {key_path}: {key}")
+        return key
+
+# Load encryption key from secret.key file
+encryption_key = load_key()
+f = Fernet(encryption_key)
+
+def encrypt_message(message):
+    try:
+        logger.debug(f"Encrypting message: {message}")
+        encrypted_message = f.encrypt(message.encode())
+        logger.debug(f"Encrypted message: {encrypted_message}")
+        return encrypted_message.decode()
+    except Exception as e:
+        logger.error(f"Error during encryption: {e}")
+        raise Exception("Error during encryption")
+
+def decrypt_message(encrypted_message):
+    try:
+        logger.debug(f"Attempting to decrypt message: {encrypted_message}")
+
+        if not encrypted_message:
+            logger.error("Encrypted message is empty")
+            raise ValueError("Encrypted message is empty")
+
+        # Ensure the encrypted message is a proper base64 encoded string
+        if len(encrypted_message) % 4 != 0:
+            logger.warning("Encrypted message length is not a multiple of 4. Padding with '='.")
+            encrypted_message += '=' * (4 - len(encrypted_message) % 4)
+
+        logger.debug(f"Encrypted message after padding: {encrypted_message}")
+        decrypted_message = f.decrypt(encrypted_message.encode()).decode()
+        logger.debug("Decryption successful")
+        return decrypted_message
+    except InvalidToken as e:
+        logger.error(f"InvalidToken error during decryption. Possible causes: incorrect key, corrupted message, or invalid format. Error: {e}")
+        logger.debug("Debug Info: Check if the key used for encryption matches the key used for decryption.")
+        raise InvalidToken("Invalid token during decryption")
+    except ValueError as e:
+        logger.error(f"ValueError during decryption. Ensure the message is properly formatted. Error: {e}")
+        logger.debug("Debug Info: Verify if the encrypted message is not empty and properly encoded.")
+        raise ValueError("Value error during decryption")
+    except TypeError as e:
+        logger.error(f"TypeError during decryption. Message might not be encoded correctly. Error: {e}")
+        logger.debug("Debug Info: Confirm the encrypted message is a valid string and properly encoded.")
+        raise TypeError("Type error during decryption")
+    except Exception as e:
+        logger.error(f"General error during decryption. This might be due to unexpected issues. Error: {e}")
+        raise Exception("General error during decryption")
+import os
+from cryptography.fernet import Fernet, InvalidToken
+import logging
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+def load_key():
+    key_path = '/root/secret.key'
     if os.path.exists(key_path):
         with open(key_path, 'rb') as key_file:
             key = key_file.read()
