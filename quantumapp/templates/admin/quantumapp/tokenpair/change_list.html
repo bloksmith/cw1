@@ -1,0 +1,96 @@
+{% extends "admin/change_list.html" %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    #fetch-trending-pairs-button {
+        margin: 10px;
+        padding: 10px 20px;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        cursor: pointer;
+    }
+    #fetch-trending-pairs-button:hover {
+        background-color: #45a049;
+    }
+    #trending-pairs-form {
+        margin: 20px 0;
+    }
+    .form-group {
+        margin: 10px 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="trending-pairs-form">
+    <div class="form-group">
+        <label for="query">Query:</label>
+        <input type="text" id="query" name="query" placeholder="Enter token symbol (e.g., WMATIC, USDT)">
+    </div>
+    <div class="form-group">
+        <label for="network">Network:</label>
+        <select id="network" name="network">
+            <option value="polygon">Polygon</option>
+            <option value="ethereum">Ethereum</option>
+            <option value="bsc">BSC</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="avalanche">Avalanche</option>
+            <option value="base">Base</option>
+            <option value="celo">Celo</option>
+            <option value="fantom">Fantom</option>
+            <option value="optimism">Optimism</option>
+        </select>
+    </div>
+    <button id="fetch-trending-pairs-button">Fetch Trending Pairs</button>
+</div>
+<div id="fetch-result"></div>
+
+{{ block.super }}
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM fully loaded and parsed'); // Ensure script is running
+        document.getElementById('fetch-trending-pairs-button').addEventListener('click', function() {
+            console.log('Fetch Trending Pairs button clicked.');  // Debug log
+            const query = document.getElementById('query').value || 'BTC';
+            const network = document.getElementById('network').value;
+
+            console.log('Fetching with query:', query, 'and network:', network);  // Debug log
+
+            fetch(`/admin/quantumapp/tokenpair/fetch-trending-pairs/?q=${query}&network=${network}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => {
+                console.log('Response status:', response.status);  // Debug log
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Response data:', data);  // Debug log
+                const resultDiv = document.getElementById('fetch-result');
+                if (data.status === 'success') {
+                    console.log('Fetched tokens:', data.tokens); // Print fetched tokens
+                    resultDiv.innerHTML = `<p style="color: green;">${data.message}</p>`;
+                } else {
+                    resultDiv.innerHTML = `<p style="color: red;">${data.message}</p>`;
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);  // Debug log
+                document.getElementById('fetch-result').innerHTML = `<p style="color: red;">Fetch error: ${error.message}</p>`;
+            });
+        });
+    });
+</script>
+{% endblock %}
