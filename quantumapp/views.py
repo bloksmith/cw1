@@ -8454,3 +8454,48 @@ def create_transaction(request):
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+import urllib.parse
+
+def generate_magnet_link(ip, port):
+    link = f"magnet:?xt=urn:node:{ip}:{port}"
+    return link
+
+def parse_magnet_link(magnet_link):
+    parsed = urllib.parse.urlparse(magnet_link)
+    if parsed.scheme != 'magnet' or not parsed.query:
+        raise ValueError("Invalid magnet link")
+    
+    params = urllib.parse.parse_qs(parsed.query)
+    if 'xt' in params and params['xt'][0].startswith('urn:node:'):
+        ip_port = params['xt'][0][9:]
+        ip, port = ip_port.split(':')
+        return ip, int(port)
+    else:
+        raise ValueError("Invalid magnet link format")
+import base64
+
+def generate_magnet_link(node_url):
+    # Encode node URL to base64 to create a magnet link
+    encoded_url = base64.urlsafe_b64encode(node_url.encode()).decode()
+    return f"magnet:?ws={encoded_url}"
+
+def decode_magnet_link(magnet_link):
+    # Decode the base64 encoded URL from the magnet link
+    prefix = "magnet:?ws="
+    if magnet_link.startswith(prefix):
+        encoded_url = magnet_link[len(prefix):]
+        node_url = base64.urlsafe_b64decode(encoded_url.encode()).decode()
+        return node_url
+    return None
+import websockets
+import asyncio
+
+async def connect_to_peer(peer_url):
+    async with websockets.connect(peer_url) as websocket:
+        await websocket.send(json.dumps({"message": "Hello from peer"}))
+        response = await websocket.recv()
+        print(f"Received: {response}")
+
+# Example usage
+peer_url = decode_magnet_link("magnet:?ws=your_magnet_link_here")
+asyncio.get_event_loop().run_until_complete(connect_to_peer(peer_url))

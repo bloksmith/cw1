@@ -863,3 +863,55 @@ class WalletConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'message': message
         }))
+# consumers.py
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+class P2PConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.peer_group = "peer_group"
+        await self.channel_layer.group_add(self.peer_group, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.peer_group, self.channel_name)
+
+    async def receive(self, text_data):
+        message = json.loads(text_data)
+        await self.channel_layer.group_send(
+            self.peer_group,
+            {
+                'type': 'peer_message',
+                'message': message
+            }
+        )
+
+    async def peer_message(self, event):
+        message = event['message']
+        await self.send(text_data=json.dumps(message))
+# consumers.py
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+class NodeConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.node_group_name = "nodes"
+        await self.channel_layer.group_add(self.node_group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.node_group_name, self.channel_name)
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        await self.channel_layer.group_send(
+            self.node_group_name, 
+            {
+                "type": "node_message",
+                "message": data['message']
+            }
+        )
+
+    async def node_message(self, event):
+        message = event['message']
+        await self.send(text_data=json.dumps({"message": message}))

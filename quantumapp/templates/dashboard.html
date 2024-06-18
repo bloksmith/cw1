@@ -2898,6 +2898,43 @@ $(document).ready(function() {
     });
 });
 </script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const magnetLinks = [
+        'magnet:?xt=urn:node:127.0.0.1:9001',
+        'magnet:?xt=urn:node:127.0.0.1:8002',
+        // Add more magnet links here
+    ];
+
+    function connectToPeers(magnetLinks) {
+        magnetLinks.forEach(link => {
+            const urlParams = new URLSearchParams(link.split('?')[1]);
+            const [ip, port] = urlParams.get('xt').split(':')[1].split(':');
+            const wsUrl = `ws://${ip}:${port}/ws/peer/`;
+            const socket = new WebSocket(wsUrl);
+
+            socket.onopen = function() {
+                console.log(`Connected to ${wsUrl}`);
+            };
+
+            socket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                console.log("Message from peer: ", message);
+            };
+
+            socket.onerror = function(error) {
+                console.log(`WebSocket error on ${wsUrl}: `, error);
+            };
+
+            socket.onclose = function() {
+                console.log(`WebSocket connection closed for ${wsUrl}`);
+            };
+        });
+    }
+
+    connectToPeers(magnetLinks);
+});
+</script>
 
 
 
