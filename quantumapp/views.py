@@ -7727,3 +7727,145 @@ def check_node_synchronization():
         "node1_latest_transaction": node1_data['latest_transaction'],
         "node2_latest_transaction": node2_data['latest_transaction'],
     }
+@csrf_exempt
+def receive_transaction(request):
+    if request.method == 'POST':
+        try:
+            transaction_data = json.loads(request.body)
+            print(f"Received transaction data: {transaction_data}")
+            sender_wallet = Wallet.objects.get(address=transaction_data['sender'])
+            receiver_wallet = Wallet.objects.get(address=transaction_data['receiver'])
+
+            transaction, created = Transaction.objects.get_or_create(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': sender_wallet,
+                    'receiver': receiver_wallet,
+                    'amount': Decimal(transaction_data['amount']),
+                    'fee': Decimal(transaction_data['fee']),
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved']
+                }
+            )
+
+            if created:
+                print(f"Transaction {transaction.hash} received and created.")
+                return JsonResponse({"status": "success", "message": "Transaction received and created"})
+            else:
+                print(f"Transaction {transaction.hash} already exists.")
+                return JsonResponse({"status": "success", "message": "Transaction already exists"})
+        except Exception as e:
+            print(f"Error receiving transaction: {e}")
+            return JsonResponse({"status": "error", "message": f"Error receiving transaction: {e}"}, status=500)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+def broadcast_transaction(transaction_data):
+    print("Broadcasting transaction to WebSocket")
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "transactions_group", {
+            "type": "chat_message",
+            "message": json.dumps(transaction_data)
+        }
+    )
+
+    # Broadcast transaction to all active nodes
+    print("Broadcasting transaction to all active nodes")
+    nodes = get_active_nodes()
+    for node in nodes:
+        try:
+            response = requests.post(f"{node['url']}/api/receive_transaction/", json=transaction_data)
+            response.raise_for_status()
+            print(f"Transaction {transaction_data['transaction_hash']} broadcasted to {node['url']}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error broadcasting transaction to {node['url']}: {e}")
+
+def get_active_nodes():
+    master_node_url = getattr(settings, 'MASTER_NODE_URL', None)
+    if not master_node_url:
+        print("MASTER_NODE_URL setting is not set")
+        return []
+
+    try:
+        response = requests.get(urljoin(str(master_node_url), "/api/nodes/"))
+        response.raise_for_status()
+        nodes = response.json()
+        print(f"Active nodes fetched from master node: {nodes}")
+        return [{"url": node} for node in nodes]
+    except requests.RequestException as e:
+        print(f"Error fetching nodes from master node: {e}")
+        return []
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            print("Received POST request to create transaction.")
+            sender_address = request.POST.get('sender')
+            receiver_address = request.POST.get('receiver')
+            amount = Decimal(request.POST.get('amount'))
+            fee = Decimal(request.POST.get('fee'))
+
+            print(f"Sender: {sender_address}, Receiver: {receiver_address}, Amount: {amount}, Fee: {fee}")
+
+            if not sender_address or not receiver_address or not amount or not fee:
+                print("Missing required fields.")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            if sender.balance < (amount + fee):
+                print("Insufficient balance.")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction = Transaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                timestamp=timezone.now(),
+                shard=shard,
+                is_approved=False
+            )
+            transaction.hash = transaction.create_hash()
+            transaction.signature = "simulated_signature"
+            transaction.save()
+
+            print(f"Transaction created with hash: {transaction.hash}")
+
+            # Attempt to approve the transaction immediately
+            try:
+                if validate_transaction(transaction):
+                    approve_transaction(transaction)
+                    message = 'Transaction created and approved'
+                    print(f"Transaction {transaction.hash} approved.")
+                else:
+                    message = 'Transaction created but not approved due to validation failure'
+                    print(f"Transaction {transaction.hash} not approved due to validation failure.")
+            except Exception as e:
+                message = f'Transaction created but approval failed: {str(e)}'
+                print(f"Approval failed for transaction {transaction.hash}: {str(e)}")
+
+            transaction_data = {
+                'transaction_hash': transaction.hash,
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'timestamp': transaction.timestamp.isoformat(),
+                'is_approved': transaction.is_approved,
+            }
+
+            # Broadcast the new transaction to the WebSocket group
+            print(f"Broadcasting transaction {transaction.hash} to WebSocket and active nodes.")
+            broadcast_transaction(transaction_data)
+
+            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+        except Wallet.DoesNotExist:
+            print("Wallet not found.")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            print(f"Error creating transaction: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
