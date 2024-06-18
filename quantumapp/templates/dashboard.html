@@ -1198,10 +1198,10 @@ body {
             </div>
         </div>
     </div>
-<div id="notification-square">
-    <h5>Latest Transactions</h5>
-    <ul id="latest-transactions-list" class="list-unstyled">
-        <li>No transactions yet...</li>
+<div id="latest-transactions" style="position: fixed; top: 10px; right: 10px; background: white; padding: 10px; border: 1px solid black; width: 300px; height: auto;">
+    <h4>Latest Transactions</h4>
+    <ul id="latest-transactions-list">
+        <!-- Latest transactions will be appended here -->
     </ul>
 </div>
 
@@ -2782,7 +2782,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // WebSocket setup
-    const ws = new WebSocket('ws://127.0.0.1:9001/ws/transactions/');
+    const ws = new WebSocket('ws://app.cashewstable.com/ws/transactions/');
     const latestTransactionsList = $('#latest-transactions-list');
 
     ws.onmessage = function(event) {
@@ -2809,6 +2809,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 </script>
+
 
 
 
