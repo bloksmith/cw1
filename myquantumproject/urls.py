@@ -4,6 +4,7 @@ from quantumapp import views
 from django.conf import settings
 from django.conf.urls.static import static
 from quantumapp.sync_utils import synchronize_nodes
+from .consumers import TransactionConsumer, WalletUpdateConsumer
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
@@ -45,5 +46,8 @@ urlpatterns = [
     path('fetch-trending-pairs/', views.fetch_trending_pairs, name='fetch_token_pairs'),
     path('fetch-token-pairs/', views.fetch_token_pairs, name='fetch_token_pairs'),
     path('api/receive_block/', views.receive_block, name='receive_block'),
+    path('get_congestion_factor/', views.get_network_congestion_factor_view, name='get_congestion_factor'),
+    path('ws/wallet_updates/', WalletUpdateConsumer.as_asgi()),
+
 
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

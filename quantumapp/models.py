@@ -90,6 +90,9 @@ class Shard(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+from django.db import models
+from decimal import Decimal
+import hashlib
 
 class Transaction(models.Model):
     hash = models.CharField(max_length=255, unique=True)
@@ -108,6 +111,17 @@ class Transaction(models.Model):
         sha = hashlib.sha256()
         sha.update((str(self.sender.public_key) + str(self.receiver.public_key) + str(self.amount) + str(self.timestamp)).encode('utf-8'))
         return sha.hexdigest()
+
+    def estimate_size(self):
+        # Estimate the size of the transaction in bytes
+        size = len(self.sender.address) + len(self.receiver.address) + len(str(self.amount)) + len(self.signature)
+        return size
+
+    @staticmethod
+    def estimate_fee(transaction_size, congestion_factor=1.0):
+        BASE_FEE_RATE = Decimal('0.00000001')  # Base fee rate per byte
+        fee = BASE_FEE_RATE * transaction_size * congestion_factor
+        return fee
 
 
 class TransactionMetadata(models.Model):

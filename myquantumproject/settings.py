@@ -42,9 +42,12 @@ ALLOWED_HOSTS = [
 # settings.py
 
 import os
+# settings.py
+import os
 
-MASTER_NODE_URL = os.getenv('MASTER_NODE_URL', 'http://app.cashewstable.com')
-CURRENT_NODE_URL = os.getenv('CURRENT_NODE_URL', 'http://localhost:8000')  # Change localhost and port as needed
+MASTER_NODE_URL = os.getenv('MASTER_NODE_URL', 'ws://app.cashewstable.com')
+CURRENT_NODE_URL = os.getenv('CURRENT_NODE_URL', 'ws://app.cashewstable.com')
+
 
 # Define the path to the encryption key file
 key_path = BASE_DIR / 'secret.key'
@@ -112,15 +115,15 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
-    'quantumapp',
-    'channels',
-    'django_apscheduler',
-    'corsheaders',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'quantumapp',
+    'channels',
+    'django_apscheduler',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [

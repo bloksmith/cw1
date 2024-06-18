@@ -730,12 +730,13 @@ body {
             <input type="number" id="amount" name="amount" class="form-control" required>
         </div>
         <div class="form-group">
-            <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
-            <input type="number" id="fee" name="fee" class="form-control" required>
+            <label for="estimated-fee"><i class="fas fa-hand-holding-usd"></i> Estimated Fee:</label>
+            <input type="text" id="estimated-fee" class="form-control" readonly>
         </div>
         <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
     </form>
 </section>
+
 
 <div class="modal fade" id="transactionModal" tabindex="-1" role="dialog" aria-labelledby="transactionModalLabel" aria-hidden="true">
     <div class="modal-dialog" role="document">
@@ -2809,6 +2810,96 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 </script>
+<script>
+$(document).ready(function() {
+    // WebSocket for transaction updates
+    const transactionSocket = new WebSocket('wss://' + window.location.host + '/ws/transactions/');
+    transactionSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Transaction update received:', data);
+        // Update your frontend with the transaction details
+    };
+
+    // WebSocket for wallet updates (if needed)
+    const walletSocket = new WebSocket('wss://' + window.location.host + '/ws/wallet_updates/');
+    walletSocket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log('Wallet update received:', data);
+        // Update your frontend with the wallet details
+    };
+
+    // Estimate fee based on amount input
+    $('#amount').on('input', function() {
+        var amount = parseFloat($(this).val());
+        if (!isNaN(amount)) {
+            // Fetch the estimated fee
+            $.ajax({
+                url: "{% url 'get_congestion_factor' %}",
+                method: 'GET',
+                success: function(response) {
+                    var congestionFactor = parseFloat(response.congestion_factor);
+                    // Calculate the fee as 100 millionth of the amount
+                    var estimatedFee = (amount * congestionFactor) / 100000000;
+                    $('#estimated-fee').val(estimatedFee.toFixed(8));  // Display the fee with up to 8 decimal places
+                },
+                error: function(response) {
+                    $('#estimated-fee').val('Error fetching fee');
+                }
+            });
+        } else {
+            $('#estimated-fee').val('');
+        }
+    });
+
+    // Handle form submission
+    $('#transaction-form').on('submit', function(event) {
+        event.preventDefault();
+        var startTime = performance.now();
+        var formData = $(this).serializeArray();
+        var amount = parseFloat(formData.find(input => input.name === 'amount').value);
+
+        if (!isNaN(amount)) {
+            // Fetch the estimated fee
+            $.ajax({
+                url: "{% url 'get_congestion_factor' %}",
+                method: 'GET',
+                success: function(response) {
+                    var congestionFactor = parseFloat(response.congestion_factor);
+                    // Calculate the fee as 100 millionth of the amount
+                    var fee = (amount * congestionFactor) / 100000000;
+
+                    // Append the fee to the form data
+                    formData.push({name: 'fee', value: fee.toFixed(8)});
+
+                    // Submit the transaction
+                    $.ajax({
+                        url: "{% url 'create_transaction' %}",
+                        method: 'POST',
+                        data: $.param(formData),
+                        success: function(response) {
+                            var endTime = performance.now();
+                            var approvalTime = ((endTime - startTime) / 1000).toFixed(2);
+
+                            $('#modalMessage').text(response.message);
+                            $('#transactionHash').text(response.transaction_hash);
+                            $('#approvalTime').text(approvalTime);
+                            $('#transactionModal').modal('show');
+                        },
+                        error: function(response) {
+                            alert('Error: ' + response.responseJSON.error);
+                        }
+                    });
+                },
+                error: function(response) {
+                    alert('Error fetching congestion factor: ' + response.responseJSON.error);
+                }
+            });
+        }
+    });
+});
+</script>
+
+
 
 
 
