@@ -7869,3 +7869,36 @@ def create_transaction(request):
             print(f"Error creating transaction: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+import requests
+from django.conf import settings
+
+def register_with_master_node():
+    master_node_url = getattr(settings, 'MASTER_NODE_URL', None)
+    if not master_node_url:
+        print("MASTER_NODE_URL setting is not set")
+        return
+
+    # Ensure master_node_url does not end with a '/'
+    if master_node_url.endswith('/'):
+        master_node_url = master_node_url[:-1]
+
+    register_url = f"{master_node_url}/api/register_node/"
+    print(f"Register URL: {register_url}")
+
+    node_data = {
+        "url": "https://app.cashewstable.com",  # Replace with your node's URL
+        # Add other relevant data
+    }
+
+    try:
+        print(f"Sending registration data: {node_data}")
+        response = requests.post(register_url, json=node_data)
+        print(f"Response status code: {response.status_code}")
+
+        if response.status_code == 200:
+            print("Successfully registered with master node")
+        else:
+            print(f"Failed to register with master node. Status code: {response.status_code}")
+            print(f"Response content: {response.content}")
+    except requests.RequestException as e:
+        print(f"Error registering with master node: {e}")
