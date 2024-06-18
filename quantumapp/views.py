@@ -5614,18 +5614,25 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.views.decorators.http import require_POST
+import json
+
 nodes = []
 
 @csrf_exempt
 @require_POST
 def register_node(request):
-    data = json.loads(request.body)
-    node_url = data.get("url")
-    if node_url and node_url not in nodes:
-        nodes.append(node_url)
-    return JsonResponse({"status": "success", "nodes": nodes})
+    try:
+        data = json.loads(request.body)
+        node_url = data.get("url")
+        if node_url and node_url not in nodes:
+            nodes.append(node_url)
+        return JsonResponse({"status": "success", "nodes": nodes})
+    except json.JSONDecodeError:
+        return JsonResponse({"status": "error", "message": "Invalid JSON"}, status=400)
 
-    
 import requests
 import logging
 import os
@@ -8594,3 +8601,23 @@ async def connect_to_peer(peer_url):
         await websocket.send(json.dumps({"message": "Hello from peer"}))
         response = await websocket.recv()
         print(f"Received: {response}")
+async def register_node_with_master(node_url):
+    async with websockets.connect(node_url) as websocket:
+        await websocket.send(json.dumps({"message": "Register node"}))
+        response = await websocket.recv()
+        print(f"Received: {response}")
+        import asyncio
+import websockets
+import json
+
+async def register_with_master():
+    uri = "ws://app.cashewstable.com/ws/register_node/"
+    try:
+        async with websockets.connect(uri) as websocket:
+            await websocket.send(json.dumps({"message": "Registering node"}))
+            response = await websocket.recv()
+            print(f"Received response: {response}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+asyncio.get_event_loop().run_until_complete(register_with_master())

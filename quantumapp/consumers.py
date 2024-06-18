@@ -931,3 +931,29 @@ class RegisterNodeConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'message': 'Node registered successfully'
         }))
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+nodes = []
+
+class NodeRegisterConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        pass
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        node_url = data.get("url")
+        if node_url and node_url not in nodes:
+            nodes.append(node_url)
+            await self.send(text_data=json.dumps({
+                "status": "success",
+                "nodes": nodes
+            }))
+        else:
+            await self.send(text_data=json.dumps({
+                "status": "error",
+                "message": "Node already registered or invalid URL"
+            }))
