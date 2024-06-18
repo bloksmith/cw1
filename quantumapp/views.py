@@ -8548,3 +8548,55 @@ if peer_url:
     asyncio.get_event_loop().run_until_complete(connect_to_peer(peer_url))
 else:
     print("Invalid magnet link")
+import urllib.parse
+import base64
+import websockets
+import asyncio
+import json
+
+# Function to generate a magnet link based on IP and port
+def generate_magnet_link(ip, port):
+    return f"magnet:?xt=urn:node:{ip}:{port}"
+
+# Function to parse the magnet link to extract IP and port
+def parse_magnet_link(magnet_link):
+    parsed = urllib.parse.urlparse(magnet_link)
+    if parsed.scheme != 'magnet' or not parsed.query:
+        raise ValueError("Invalid magnet link")
+    
+    params = urllib.parse.parse_qs(parsed.query)
+    if 'xt' in params and params['xt'][0].startswith('urn:node:'):
+        ip_port = params['xt'][0][9:]
+        ip, port = ip_port.split(':')
+        return ip, int(port)
+    else:
+        raise ValueError("Invalid magnet link format")
+
+# Function to generate a magnet link based on a node URL
+def generate_magnet_link_from_url(node_url):
+    encoded_url = base64.urlsafe_b64encode(node_url.encode()).decode().rstrip("=")
+    return f"magnet:?ws={encoded_url}"
+
+# Function to decode a magnet link to extract the node URL
+def decode_magnet_link(magnet_link):
+    prefix = "magnet:?ws="
+    if magnet_link.startswith(prefix):
+        encoded_url = magnet_link[len(prefix):]
+        # Ensure the encoded_url length is a multiple of 4 by adding '=' padding if necessary
+        padding_needed = len(encoded_url) % 4
+        if padding_needed:
+            encoded_url += '=' * (4 - padding_needed)
+        try:
+            node_url = base64.urlsafe_b64decode(encoded_url.encode()).decode()
+            return node_url
+        except (base64.binascii.Error, UnicodeDecodeError) as e:
+            print(f"Error decoding magnet link: {e}")
+            return None
+    return None
+
+# Asynchronous function to connect to a peer via WebSocket
+async def connect_to_peer(peer_url):
+    async with websockets.connect(peer_url) as websocket:
+        await websocket.send(json.dumps({"message": "Hello from peer"}))
+        response = await websocket.recv()
+        print(f"Received: {response}")
