@@ -8542,12 +8542,6 @@ async def connect_to_peer(peer_url):
         response = await websocket.recv()
         print(f"Received: {response}")
 
-# Example usage
-peer_url = decode_magnet_link("magnet:?ws=your_base64_encoded_url_here")
-if peer_url:
-    asyncio.get_event_loop().run_until_complete(connect_to_peer(peer_url))
-else:
-    print("Invalid magnet link")
 import urllib.parse
 import base64
 import websockets
