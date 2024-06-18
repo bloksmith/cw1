@@ -21,6 +21,25 @@
     </nav>
 </header>
 <style>
+        #notification-square {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+        #notification-square h5 {
+            margin-top: 0;
+        }
+    </style>
+<style>
         .modal-content {
             background-color: #f8f9fa;
             border-radius: 10px;
@@ -1142,7 +1161,7 @@ body {
             </div>
         </div>
     </div>
-    <div class="modal fade" id="networkStatusModal" tabindex="-1" role="dialog" aria-labelledby="networkStatusModalLabel" aria-hidden="true">
+        <div class="modal fade" id="networkStatusModal" tabindex="-1" role="dialog" aria-labelledby="networkStatusModalLabel" aria-hidden="true">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
                 <div class="modal-header">
@@ -1179,6 +1198,13 @@ body {
             </div>
         </div>
     </div>
+<div id="notification-square">
+    <h5>Latest Transactions</h5>
+    <ul id="latest-transactions-list" class="list-unstyled">
+        <li>No transactions yet...</li>
+    </ul>
+</div>
+
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
 	    <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -2674,56 +2700,117 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>       <script>
         $(document).ready(function() {
-            $('#transaction-form').on('submit', function(event) {
-                event.preventDefault();
-                var startTime = performance.now();
-                
-                $.ajax({
-                    url: "{% url 'dashboard' %}",
-                    method: 'POST',
-                    data: $(this).serialize() + "&create_transaction=1",
-                    success: function(response) {
-                        var endTime = performance.now();
-                        var approvalTime = ((endTime - startTime) / 1000).toFixed(2);
+    var websocket;
 
-                        $('#modalMessage').text(response.message);
-                        $('#transactionHash').text(response.transaction_hash);
-                        $('#approvalTime').text(approvalTime);
-                        $('#transactionModal').modal('show');
-                    },
-                    error: function(response) {
-                        alert('Error: ' + response.responseJSON.error);
-                    }
-                });
-            });
-        });
-    </script>
-    <script>
-        $('#view-network-status-button').click(async function() {
-            const response = await fetch('/network_status/', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}',
-                },
-            });
-            if (response.ok) {
-                const data = await response.json();
-                console.log('Network status data:', data);
-                const syncStatus = data.is_synchronized ? "Nodes are synchronized" : "Nodes are not synchronized";
+    function connectWebSocket() {
+        websocket = new WebSocket('ws://127.0.0.1:9001/ws/transactions/');
 
-                $('#sync-status').text(syncStatus);
-                $('#node1-latest-transaction').text(data.node1_latest_transaction ? JSON.stringify(data.node1_latest_transaction, null, 2) : 'No data');
-                $('#node1-transaction-pool').text(data.node1_transaction_pool ? JSON.stringify(data.node1_transaction_pool, null, 2) : 'No data');
-                $('#node2-latest-transaction').text(data.node2_latest_transaction ? JSON.stringify(data.node2_latest_transaction, null, 2) : 'No data');
-                $('#node2-transaction-pool').text(data.node2_transaction_pool ? JSON.stringify(data.node2_transaction_pool, null, 2) : 'No data');
+        websocket.onopen = function() {
+            console.log("WebSocket connection opened");
+        };
 
-                $('#networkStatusModal').modal('show');
-            } else {
-                alert('Failed to fetch network status');
+        websocket.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            console.log("WebSocket message received:", data);
+
+            // Handle new transaction messages
+            if (data.message) {
+                alert("New transaction message: " + data.message);
+            }
+        };
+
+        websocket.onclose = function() {
+            console.log("WebSocket connection closed");
+        };
+
+        websocket.onerror = function(error) {
+            console.log("WebSocket error: " + error);
+        };
+    }
+
+    connectWebSocket();
+
+    $('#transaction-form').on('submit', function(event) {
+        event.preventDefault();
+        var startTime = performance.now();
+
+        $.ajax({
+            url: "{% url 'create_transaction' %}",
+            method: 'POST',
+            data: $(this).serialize(),
+            success: function(response) {
+                var endTime = performance.now();
+                var approvalTime = ((endTime - startTime) / 1000).toFixed(2);
+
+                $('#modalMessage').text(response.message);
+                $('#transactionHash').text(response.transaction_hash);
+                $('#approvalTime').text(approvalTime);
+                $('#transactionModal').modal('show');
+            },
+            error: function(response) {
+                alert('Error: ' + response.responseJSON.error);
             }
         });
+    });
+});
+
     </script>
+   <script>
+    $('#view-network-status-button').click(async function() {
+        const response = await fetch('/network_status/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+        });
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Network status data:', data);
+            const syncStatus = data.is_synchronized ? "Nodes are synchronized" : "Nodes are not synchronized";
+
+            $('#sync-status').text(syncStatus);
+            $('#node1-latest-transaction').text(data.node1_latest_transaction ? JSON.stringify(data.node1_latest_transaction, null, 2) : 'No data');
+            $('#node1-transaction-pool').text(data.node1_transaction_pool ? JSON.stringify(data.node1_transaction_pool, null, 2) : 'No data');
+            $('#node2-latest-transaction').text(data.node2_latest_transaction ? JSON.stringify(data.node2_latest_transaction, null, 2) : 'No data');
+            $('#node2-transaction-pool').text(data.node2_transaction_pool ? JSON.stringify(data.node2_transaction_pool, null, 2) : 'No data');
+
+            $('#networkStatusModal').modal('show');
+        } else {
+            alert('Failed to fetch network status');
+        }
+    });
+
+    // WebSocket setup
+    const ws = new WebSocket('ws://127.0.0.1:9001/ws/transactions/');
+    const latestTransactionsList = $('#latest-transactions-list');
+
+    ws.onmessage = function(event) {
+        const message = JSON.parse(event.data);
+        const transaction = JSON.parse(message.message);
+
+        const newTransactionItem = `
+            <li>
+                <strong>Hash:</strong> ${transaction.transaction_hash}<br>
+                <strong>Sender:</strong> ${transaction.sender}<br>
+                <strong>Receiver:</strong> ${transaction.receiver}<br>
+                <strong>Amount:</strong> ${transaction.amount}<br>
+                <strong>Fee:</strong> ${transaction.fee}<br>
+                <strong>Timestamp:</strong> ${transaction.timestamp}<br>
+                <strong>Approved:</strong> ${transaction.is_approved}
+            </li>
+        `;
+
+        latestTransactionsList.prepend(newTransactionItem);
+
+        // Keep only the 5 latest transactions
+        if (latestTransactionsList.children().length > 5) {
+            latestTransactionsList.children().last().remove();
+        }
+    };
+</script>
+
+
 
 
 
