@@ -7902,3 +7902,81 @@ def register_with_master_node():
             print(f"Response content: {response.content}")
     except requests.RequestException as e:
         print(f"Error registering with master node: {e}")
+def get_active_nodes(master_node_url):
+    try:
+        response = requests.get(urljoin(str(master_node_url), "/api/nodes/"))
+        response.raise_for_status()
+        nodes = response.json()
+        return [{"url": node} for node in nodes]
+    except requests.RequestException as e:
+        logger.error(f"Error fetching nodes from master node: {e}")
+        return []
+def check_node_synchronization():
+    master_node_url = getattr(settings, 'MASTER_NODE_URL', None)
+    if not master_node_url:
+        return {
+            "is_synchronized": False,
+            "message": "MASTER_NODE_URL setting is not set",
+        }
+
+    nodes = get_active_nodes(master_node_url)  # Correctly pass the master_node_url
+
+    if len(nodes) < 2:
+        return {
+            "is_synchronized": False,
+            "message": "Not enough nodes to check synchronization",
+            "nodes": nodes,
+        }
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(fetch_node_data, node['url']) for node in nodes[:2]]
+        results = [future.result() for future in as_completed(futures)]
+
+    node1_data = results[0]
+    node2_data = results[1]
+
+    is_synchronized = node1_data['latest_transaction'] == node2_data['latest_transaction']
+    return {
+        "is_synchronized": is_synchronized,
+        "node1_latest_transaction": node1_data['latest_transaction'],
+        "node2_latest_transaction": node2_data['latest_transaction'],
+    }
+def fetch_node_data(node_url):
+    try:
+        print(f"Fetching data from node: {node_url}")
+        response = requests.get(urljoin(str(node_url), "/api/latest_transaction/"))
+        response.raise_for_status()
+        data = response.json()
+        print(f"Data fetched from node {node_url}: {data}")
+        return {"url": node_url, "latest_transaction": data}
+    except requests.RequestException as e:
+        print(f"Error fetching data from node {node_url}: {e}")
+        return {"url": node_url, "latest_transaction": None, "error": str(e)}
+def register_with_master_node():
+    master_node_url = getattr(settings, 'MASTER_NODE_URL', None)
+    if not master_node_url:
+        print("MASTER_NODE_URL setting is not set")
+        return
+
+    if master_node_url.endswith('/'):
+        master_node_url = master_node_url[:-1]
+
+    register_url = f"{master_node_url}/api/register_node/"
+    print(f"Register URL: {register_url}")
+
+    node_data = {
+        "url": "http://your-node-url.com",
+    }
+
+    try:
+        print(f"Sending registration data to {register_url}: {node_data}")
+        response = requests.post(register_url, json=node_data)
+        print(f"Response status code: {response.status_code}")
+
+        if response.status_code == 200:
+            print("Successfully registered with master node")
+        else:
+            print(f"Failed to register with master node. Status code: {response.status_code}")
+            print(f"Response content: {response.content}")
+    except requests.RequestException as e:
+        print(f"Error registering with master node: {e}")
