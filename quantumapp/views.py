@@ -8754,7 +8754,6 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from .models import Wallet, Transaction, Shard
-from .utils import validate_transaction, generate_unique_hash
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import json
