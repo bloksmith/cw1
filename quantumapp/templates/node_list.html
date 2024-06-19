@@ -1,0 +1,40 @@
+<!-- quantumapp/templates/node_list.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Registered Nodes</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Registered Nodes</h1>
+    <table>
+        <tr>
+            <th>Address</th>
+            <th>Public Key</th>
+            <th>Last Seen</th>
+        </tr>
+        {% for node in nodes %}
+        <tr>
+            <td>{{ node.address }}</td>
+            <td>{{ node.public_key }}</td>
+            <td>{{ node.last_seen }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>

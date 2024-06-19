@@ -51,6 +51,7 @@ urlpatterns = [
     path('ws/peer/', consumers.P2PConsumer.as_asgi()),
     re_path(r'ws/nodes/$', consumers.NodeConsumer.as_asgi()),
     path('recent_transactions/', views.recent_transactions, name='recent_transactions'),
+    path('nodes/', views.node_list, name='node_list'),
 
 
 

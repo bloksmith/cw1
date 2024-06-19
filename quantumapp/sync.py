@@ -2,11 +2,15 @@
 import json
 import requests
 import logging
+from .models import Node
 
 logger = logging.getLogger(__name__)
 
+def get_known_nodes():
+    return [node.url for node in Node.objects.all()]
+
 def broadcast_transactions(transactions):
-    global known_nodes  # Ensure we use the updated list of known nodes
+    nodes = get_known_nodes()  # Use dynamic list of nodes
     for transaction in transactions:
         transaction_data = {
             'transaction_hash': transaction.hash,
@@ -17,7 +21,7 @@ def broadcast_transactions(transactions):
             'timestamp': transaction.timestamp.isoformat(),
             'is_approved': transaction.is_approved
         }
-        for node in known_nodes:
+        for node in nodes:
             try:
                 response = requests.post(f"{node}/api/receive_transaction/", json=transaction_data)
                 if response.status_code == 200:
@@ -28,8 +32,8 @@ def broadcast_transactions(transactions):
                 logger.error(f"Error broadcasting transaction {transaction.hash} to {node}: {e}")
 
 def broadcast_transaction(transaction_data):
-    global known_nodes  # Ensure we use the updated list of known nodes
-    for node in known_nodes:
+    nodes = get_known_nodes()  # Use dynamic list of nodes
+    for node in nodes:
         try:
             response = requests.post(f"{node}/api/receive_transaction/", json=transaction_data)
             if response.status_code == 200:
