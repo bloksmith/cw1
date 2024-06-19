@@ -1,5 +1,5 @@
 from django.urls import path, re_path
-from .consumers import TokenConsumer, PoolConsumer, BlockchainConsumer, TransactionConsumer, SyncConsumer, SyncStatusConsumer, DAGConsumer,RegisterNodeConsumer,NodeRegisterConsumer
+from .consumers import TokenConsumer, PoolConsumer, RegisterNodeConsumer,BlockchainConsumer, TransactionConsumer, SyncConsumer, SyncStatusConsumer, DAGConsumer,RegisterNodeConsumer,NodeRegisterConsumer
 
 websocket_urlpatterns = [
     path('ws/token/', TokenConsumer.as_asgi()),
