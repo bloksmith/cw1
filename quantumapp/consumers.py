@@ -984,9 +984,12 @@ class TransactionConsumer(AsyncWebsocketConsumer):
         message = event["message"]
         await self.send(text_data=json.dumps(message))
 # quantumapp/consumers.py
+
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
+import logging
 
+logger = logging.getLogger(__name__)
 class TransactionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         await self.channel_layer.group_add("transactions_group", self.channel_name)
@@ -1009,3 +1012,14 @@ class TransactionConsumer(AsyncWebsocketConsumer):
     async def transaction_message(self, event):
         message = event["message"]
         await self.send(text_data=json.dumps(message))
+
+        # Forward the transaction to the HTTP endpoint
+        response = requests.post(
+            'https://app.cashestable.com/receive_transaction/',  # Adjust the URL to match your setup
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(message)
+        )
+        if response.status_code == 200:
+            print("Transaction forwarded successfully")
+        else:
+            print("Failed to forward transaction")

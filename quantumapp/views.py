@@ -8827,3 +8827,11 @@ def create_transaction(request):
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+# quantumapp/views.py
+
+from django.shortcuts import render
+from .models import Transaction
+
+def recent_transactions(request):
+    transactions = Transaction.objects.order_by('-timestamp')[:10]  # Fetch last 10 transactions
+    return render(request, 'recent_transactions.html', {'transactions': transactions})

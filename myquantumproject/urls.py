@@ -50,6 +50,8 @@ urlpatterns = [
     path('ws/wallet_updates/', consumers.WalletUpdateConsumer.as_asgi()),
     path('ws/peer/', consumers.P2PConsumer.as_asgi()),
     re_path(r'ws/nodes/$', consumers.NodeConsumer.as_asgi()),
+    path('recent_transactions/', views.recent_transactions, name='recent_transactions'),
+
 
 
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
