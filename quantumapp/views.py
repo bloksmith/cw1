@@ -8842,3 +8842,171 @@ from .models import Transaction
 def recent_transactions(request):
     transactions = Transaction.objects.order_by('-timestamp')[:10]  # Fetch last 10 transactions
     return render(request, 'recent_transactions.html', {'transactions': transactions})
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    for transaction in transactions:
+        logger.info(f"Validating transaction {transaction.hash}")
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+        else:
+            logger.info(f"Transaction {transaction.hash} was not approved")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+
+    if total_reward <= 0:
+        return JsonResponse({
+            'message': 'No reward due to supply cap. Skipping block mining.',
+            'proof': proof,
+            'reward': 0,
+            'fees': total_fees,
+            'total_reward': 0
+        })
+
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    dag[new_block_hash] = new_block
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+
+    # Log broadcasting transactions
+    logger.info("Broadcasting approved transactions")
+    broadcast_transactions(approved_transactions)
+
+    # Log broadcasting the reward transaction
+    logger.info("Broadcasting reward transaction")
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+
+    return JsonResponse({
+        'message': f'Block mined successfully in shard {shard.name}',
+        'proof': proof,
+        'reward': block_reward,
+        'fees': total_fees,
+        'total_reward': total_reward
+    })
+
+def broadcast_transactions(transactions):
+    channel_layer = get_channel_layer()
+    for transaction in transactions:
+        transaction_data = {
+            'transaction_hash': transaction.hash,
+            'sender': transaction.sender.address,
+            'receiver': transaction.receiver.address,
+            'amount': str(transaction.amount),
+            'fee': str(transaction.fee),
+            'timestamp': transaction.timestamp.isoformat(),
+            'is_approved': transaction.is_approved
+        }
+        async_to_sync(channel_layer.group_send)(
+            "transactions", {
+                "type": "transaction_message",
+                "message": transaction_data
+            }
+        )
+        logger.info(f"Broadcasted transaction {transaction.hash}")
+
+def broadcast_transaction(transaction_data):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "transactions", {
+            "type": "transaction_message",
+            "message": transaction_data
+        }
+    )
+    logger.info(f"Broadcasted single transaction {transaction_data['transaction_hash']}")
+
+# quantumapp/views.py
+@csrf_exempt
+def receive_transaction(request):
+    if request.method == 'POST':
+        try:
+            logger.info("Received transaction from another node")
+            transaction_data = json.loads(request.body)
+            sender_wallet = Wallet.objects.get(address=transaction_data['sender'])
+            receiver_wallet = Wallet.objects.get(address=transaction_data['receiver'])
+
+            transaction, created = Transaction.objects.get_or_create(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': sender_wallet,
+                    'receiver': receiver_wallet,
+                    'amount': Decimal(transaction_data['amount']),
+                    'fee': Decimal(transaction_data['fee']),
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved']
+                }
+            )
+
+            if created:
+                logger.info(f"Transaction {transaction.hash} received and created.")
+                if transaction.is_approved:
+                    sender_wallet.balance -= transaction.amount + transaction.fee
+                    receiver_wallet.balance += transaction.amount
+                    sender_wallet.save()
+                    receiver_wallet.save()
+                return JsonResponse({"status": "success", "message": "Transaction received and created"})
+            else:
+                logger.info(f"Transaction {transaction.hash} already exists.")
+                return JsonResponse({"status": "success", "message": "Transaction already exists"})
+        except Exception as e:
+            logger.error(f"Error receiving transaction: {e}")
+            return JsonResponse({"status": "error", "message": f"Error receiving transaction: {e}"}, status=500)
+    logger.warning("Invalid request method")
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)

@@ -992,17 +992,20 @@ import logging
 logger = logging.getLogger(__name__)
 class TransactionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        await self.channel_layer.group_add("transactions_group", self.channel_name)
+        await self.channel_layer.group_add("transactions", self.channel_name)
         await self.accept()
+        logger.info(f"WebSocket connection accepted: {self.channel_name}")
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard("transactions_group", self.channel_name)
+        await self.channel_layer.group_discard("transactions", self.channel_name)
+        logger.info(f"WebSocket connection closed: {self.channel_name}")
 
     async def receive(self, text_data):
         data = json.loads(text_data)
+        logger.info(f"Received data: {data}")
         # Broadcast the received transaction to the group
         await self.channel_layer.group_send(
-            "transactions_group",
+            "transactions",
             {
                 "type": "transaction_message",
                 "message": data
@@ -1011,15 +1014,5 @@ class TransactionConsumer(AsyncWebsocketConsumer):
 
     async def transaction_message(self, event):
         message = event["message"]
+        logger.info(f"Broadcasting message: {message}")
         await self.send(text_data=json.dumps(message))
-
-        # Forward the transaction to the HTTP endpoint
-        response = requests.post(
-            'https://app.cashestable.com/receive_transaction/',  # Adjust the URL to match your setup
-            headers={'Content-Type': 'application/json'},
-            data=json.dumps(message)
-        )
-        if response.status_code == 200:
-            print("Transaction forwarded successfully")
-        else:
-            print("Failed to forward transaction")
