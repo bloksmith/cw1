@@ -1016,3 +1016,31 @@ class TransactionConsumer(AsyncWebsocketConsumer):
         message = event["message"]
         logger.info(f"Broadcasting message: {message}")
         await self.send(text_data=json.dumps(message))
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+from .models import Node
+
+class RegisterNodeConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        pass
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            node_url = data.get('url')
+            public_key = data.get('public_key')
+
+            if node_url and public_key:
+                # Save the node to the database
+                node, created = Node.objects.get_or_create(address=node_url, defaults={'public_key': public_key})
+                if created:
+                    await self.send(json.dumps({"status": "success", "message": "Node registered"}))
+                else:
+                    await self.send(json.dumps({"status": "error", "message": "Node already registered"}))
+            else:
+                await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
+        except Exception as e:
+            await self.send(json.dumps({"status": "error", "message": str(e)}))

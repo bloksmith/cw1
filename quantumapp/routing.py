@@ -9,6 +9,6 @@ websocket_urlpatterns = [
     path('ws/sync/', SyncConsumer.as_asgi()),
     re_path(r'ws/sync_status/$', SyncStatusConsumer.as_asgi()),
     path('ws/dag/', DAGConsumer.as_asgi()),
-    re_path(r'ws/register_node/$', NodeRegisterConsumer.as_asgi()),
+    path('ws/register_node/', RegisterNodeConsumer.as_asgi()),
 
 ]
