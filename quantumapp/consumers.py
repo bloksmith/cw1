@@ -957,3 +957,55 @@ class NodeRegisterConsumer(AsyncWebsocketConsumer):
                 "status": "error",
                 "message": "Node already registered or invalid URL"
             }))
+# quantumapp/consumers.py
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.channel_layer.group_add("transactions", self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("transactions", self.channel_name)
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        # Broadcast the received transaction to the group
+        await self.channel_layer.group_send(
+            "transactions",
+            {
+                "type": "transaction_message",
+                "message": data
+            }
+        )
+
+    async def transaction_message(self, event):
+        message = event["message"]
+        await self.send(text_data=json.dumps(message))
+# quantumapp/consumers.py
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.channel_layer.group_add("transactions_group", self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("transactions_group", self.channel_name)
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        # Broadcast the received transaction to the group
+        await self.channel_layer.group_send(
+            "transactions_group",
+            {
+                "type": "transaction_message",
+                "message": data
+            }
+        )
+
+    async def transaction_message(self, event):
+        message = event["message"]
+        await self.send(text_data=json.dumps(message))

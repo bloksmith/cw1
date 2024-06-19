@@ -32,6 +32,9 @@ async def register_with_master_node_async():
                         return
                     else:
                         logger.error(f"Failed to register with master node. Response: {response_data}")
+                        if response_data.get("message") == "Node already registered or invalid URL":
+                            logger.warning("Attempting to re-register with a unique URL.")
+                            current_node_url = f"{current_node_url}?attempt={attempt}"
             except Exception as e:
                 logger.error(f"Error registering with master node: {e}")
 

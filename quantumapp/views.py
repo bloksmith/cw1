@@ -8620,4 +8620,210 @@ async def register_with_master():
     except Exception as e:
         print(f"Error: {e}")
 
-asyncio.get_event_loop().run_until_complete(register_with_master())
+mining_statistics = {
+    "blocks_mined": 0,
+    "total_rewards": 0,
+}
+
+# quantumapp/views.py
+
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        print("Shard not found")
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    for transaction in transactions:
+        print(f"Validating transaction {transaction.hash}")
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+        else:
+            print(f"Transaction {transaction.hash} was not approved")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+
+    if total_reward <= 0:
+        return JsonResponse({
+            'message': 'No reward due to supply cap. Skipping block mining.',
+            'proof': proof,
+            'reward': 0,
+            'fees': total_fees,
+            'total_reward': 0
+        })
+
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    dag[new_block_hash] = new_block
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+
+    return JsonResponse({
+        'message': f'Block mined successfully in shard {shard.name}',
+        'proof': proof,
+        'reward': block_reward,
+        'fees': total_fees,
+        'total_reward': total_reward
+    })
+
+# Helper functions for broadcasting
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
+def broadcast_transactions(transactions):
+    channel_layer = get_channel_layer()
+    for transaction in transactions:
+        transaction_data = {
+            'transaction_hash': transaction.hash,
+            'sender': transaction.sender.address,
+            'receiver': transaction.receiver.address,
+            'amount': str(transaction.amount),
+            'fee': str(transaction.fee),
+            'timestamp': transaction.timestamp.isoformat(),
+            'is_approved': transaction.is_approved,
+        }
+        async_to_sync(channel_layer.group_send)(
+            "transactions_group", {
+                "type": "transaction_message",
+                "message": transaction_data
+            }
+        )
+
+def broadcast_transaction(transaction_data):
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        "transactions_group", {
+            "type": "transaction_message",
+            "message": transaction_data
+        }
+    )
+
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            sender_address = request.POST.get('sender')
+            receiver_address = request.POST.get('receiver')
+            amount = Decimal(request.POST.get('amount'))
+
+            if not sender_address or not receiver_address or not amount:
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            # Calculate the fee based on the network congestion factor
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction = Transaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                timestamp=timezone.now(),
+                shard=shard,
+                is_approved=False
+            )
+            transaction.hash = transaction.create_hash()
+            transaction.signature = "simulated_signature"
+            transaction.save()
+
+            # Attempt to approve the transaction immediately
+            try:
+                if validate_transaction(transaction):
+                    approve_transaction(transaction)
+                    message = 'Transaction created and approved'
+                else:
+                    message = 'Transaction created but not approved due to validation failure'
+            except Exception as e:
+                message = f'Transaction created but approval failed: {str(e)}'
+
+            transaction_data = {
+                'transaction_hash': transaction.hash,
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'timestamp': transaction.timestamp.isoformat(),
+                'is_approved': transaction.is_approved,
+            }
+
+            # Broadcast the new transaction to the WebSocket group
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions_group", {
+                    "type": "transaction_message",
+                    "message": transaction_data
+                }
+            )
+
+            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+        except Wallet.DoesNotExist:
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
