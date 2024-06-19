@@ -9401,3 +9401,34 @@ def mine_single_block(user, shard_id):
         'fees': total_fees,
         'total_reward': total_reward
     })
+def receive_transaction(request):
+    if request.method == 'POST':
+        try:
+            transaction_data = json.loads(request.body)
+            sender_wallet = Wallet.objects.get(address=transaction_data['sender'])
+            receiver_wallet = Wallet.objects.get(address=transaction_data['receiver'])
+
+            transaction, created = Transaction.objects.get_or_create(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': sender_wallet,
+                    'receiver': receiver_wallet,
+                    'amount': transaction_data['amount'],
+                    'fee': transaction_data['fee'],
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved']
+                }
+            )
+
+            if created:
+                if transaction.is_approved:
+                    sender_wallet.balance -= transaction.amount + transaction.fee
+                    receiver_wallet.balance += transaction.amount
+                    sender_wallet.save()
+                    receiver_wallet.save()
+                return JsonResponse({"status": "success", "message": "Transaction received and created"})
+            else:
+                return JsonResponse({"status": "success", "message": "Transaction already exists"})
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)

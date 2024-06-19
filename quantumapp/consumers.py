@@ -926,11 +926,23 @@ class RegisterNodeConsumer(AsyncWebsocketConsumer):
         pass
 
     async def receive(self, text_data):
-        data = json.loads(text_data)
-        # Process data here
-        await self.send(text_data=json.dumps({
-            'message': 'Node registered successfully'
-        }))
+        try:
+            data = json.loads(text_data)
+            node_url = data.get('url')
+            public_key = data.get('public_key')
+
+            if node_url and public_key:
+                # Save the node to the database
+                node, created = Node.objects.get_or_create(address=node_url, defaults={'public_key': public_key})
+                if created:
+                    await self.send(json.dumps({"status": "success", "message": "Node registered"}))
+                else:
+                    await self.send(json.dumps({"status": "error", "message": "Node already registered"}))
+            else:
+                await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
+        except Exception as e:
+            await self.send(json.dumps({"status": "error", "message": str(e)}))
+
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 
@@ -1023,3 +1035,41 @@ class TransactionConsumer(AsyncWebsocketConsumer):
             print("Transaction forwarded successfully")
         else:
             print("Failed to forward transaction")
+class TransactionConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.channel_layer.group_add("transactions_group", self.channel_name)
+        await self.accept()
+        logger.debug("WebSocket connected")
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("transactions_group", self.channel_name)
+        logger.debug("WebSocket disconnected with code: %s", close_code)
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        logger.debug(f"Received data: {data}")
+
+        # Broadcast the received transaction to the group
+        await self.channel_layer.group_send(
+            "transactions_group",
+            {
+                "type": "transaction_message",
+                "message": data
+            }
+        )
+
+        # Forward the transaction to the HTTP endpoint
+        response = requests.post(
+            'https://app.cashewstable.com/receive_transaction/',  # Adjust the URL to match your setup
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(data)
+        )
+        if response.status_code == 200:
+            logger.info("Transaction forwarded successfully")
+        else:
+            logger.error("Failed to forward transaction")
+
+    async def transaction_message(self, event):
+        message = event["message"]
+        logger.debug(f"Broadcasting message: {message}")
+        await self.send(text_data=json.dumps(message))
