@@ -951,24 +951,28 @@ nodes = []
 class NodeRegisterConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         await self.accept()
+        logger.info("NodeRegisterConsumer connected")
 
     async def disconnect(self, close_code):
-        pass
+        logger.info(f"NodeRegisterConsumer disconnected: {close_code}")
 
     async def receive(self, text_data):
         data = json.loads(text_data)
         node_url = data.get("url")
-        if node_url and node_url not in nodes:
-            nodes.append(node_url)
-            await self.send(text_data=json.dumps({
-                "status": "success",
-                "nodes": nodes
-            }))
+        public_key = data.get("public_key")
+
+        if node_url and public_key:
+            node, created = Node.objects.get_or_create(address=node_url, defaults={'public_key': public_key})
+            if created:
+                await self.send(json.dumps({"status": "success", "message": "Node registered"}))
+                logger.info(f"Node registered: {node_url}")
+            else:
+                await self.send(json.dumps({"status": "error", "message": "Node already registered"}))
+                logger.info(f"Node already registered: {node_url}")
         else:
-            await self.send(text_data=json.dumps({
-                "status": "error",
-                "message": "Node already registered or invalid URL"
-            }))
+            await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
+            logger.error("Invalid data received")
+
 # quantumapp/consumers.py
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer

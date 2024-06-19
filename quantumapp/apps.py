@@ -1,4 +1,3 @@
-# quantumapp/apps.py
 from django.apps import AppConfig
 import threading
 import logging
