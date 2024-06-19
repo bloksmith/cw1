@@ -7738,8 +7738,8 @@ def check_node_synchronization():
 def receive_transaction(request):
     if request.method == 'POST':
         try:
+            print("Received transaction from another node")
             transaction_data = json.loads(request.body)
-            print(f"Received transaction data: {transaction_data}")
             sender_wallet = Wallet.objects.get(address=transaction_data['sender'])
             receiver_wallet = Wallet.objects.get(address=transaction_data['receiver'])
 
@@ -7757,6 +7757,11 @@ def receive_transaction(request):
 
             if created:
                 print(f"Transaction {transaction.hash} received and created.")
+                if transaction.is_approved:
+                    sender_wallet.balance -= transaction.amount + transaction.fee
+                    receiver_wallet.balance += transaction.amount
+                    sender_wallet.save()
+                    receiver_wallet.save()
                 return JsonResponse({"status": "success", "message": "Transaction received and created"})
             else:
                 print(f"Transaction {transaction.hash} already exists.")
@@ -7764,7 +7769,9 @@ def receive_transaction(request):
         except Exception as e:
             print(f"Error receiving transaction: {e}")
             return JsonResponse({"status": "error", "message": f"Error receiving transaction: {e}"}, status=500)
+    print("Invalid request method")
     return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+
 def broadcast_transaction(transaction_data):
     print("Broadcasting transaction to WebSocket")
     channel_layer = get_channel_layer()
