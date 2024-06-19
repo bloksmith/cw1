@@ -360,72 +360,6 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from .models import Wallet, Transaction, Shard
 
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()  # Assuming you have at least one shard
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False  # Transaction starts as not approved
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"  # You should replace this with actual signature logic
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            # Send transaction via WebSocket
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "transactions", {
-                    "type": "new_transaction",
-                    "transaction": {
-                        "sender": sender_address,
-                        "receiver": receiver_address,
-                        "amount": str(amount),
-                        "fee": str(fee),
-                        "hash": transaction.hash,
-                        "timestamp": transaction.timestamp.isoformat(),
-                        "is_approved": transaction.is_approved,
-                    }
-                }
-            )
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 
 def approve_transaction(transaction):
     if transaction.is_approved:
@@ -6455,141 +6389,6 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 import json
 
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()  # Assuming you have at least one shard
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False  # Transaction starts as not approved
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"  # You should replace this with actual signature logic
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            # Send WebSocket message
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "transactions_group",
-                {
-                    "type": "chat_message",
-                    "message": json.dumps({
-                        "transaction_hash": transaction.hash,
-                        "sender": sender_address,
-                        "receiver": receiver_address,
-                        "amount": str(amount),
-                        "fee": str(fee),
-                        "timestamp": transaction.timestamp.isoformat(),
-                        "is_approved": transaction.is_approved
-                    })
-                }
-            )
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()  # Assuming you have at least one shard
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False  # Transaction starts as not approved
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"  # You should replace this with actual signature logic
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            # Prepare transaction data to broadcast
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "transactions_group", {
-                    "type": "chat_message",
-                    "message": json.dumps(transaction_data)
-                }
-            )
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 import requests
 
 def broadcast_transaction(transaction):
@@ -7335,68 +7134,6 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 import json
 
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            broadcast_transaction(transaction_data)
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 
 def broadcast_transaction(transaction_data):
     channel_layer = get_channel_layer()
@@ -7538,80 +7275,6 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from urllib.parse import urljoin
 from django.conf import settings
-
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            print("Received transaction creation request")
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                print("Missing fields in the transaction request")
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            if sender.balance < (amount + fee):
-                print("Insufficient balance for the transaction")
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-            print(f"Transaction created with hash: {transaction.hash}")
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                    print("Transaction approved")
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-                    print("Transaction validation failed")
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-                print(f"Transaction approval exception: {e}")
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            print("Broadcasting transaction to WebSocket and other nodes")
-            broadcast_transaction(transaction_data)
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            print("Wallet not found")
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            return JsonResponse({'error': str(e)}, status=500)
-    print("Invalid request method")
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 
 def broadcast_transaction(transaction_data):
     print("Broadcasting transaction to WebSocket")
@@ -7808,81 +7471,6 @@ def get_active_nodes():
     except requests.RequestException as e:
         print(f"Error fetching nodes from master node: {e}")
         return []
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            print("Received POST request to create transaction.")
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-            fee = Decimal(request.POST.get('fee'))
-
-            print(f"Sender: {sender_address}, Receiver: {receiver_address}, Amount: {amount}, Fee: {fee}")
-
-            if not sender_address or not receiver_address or not amount or not fee:
-                print("Missing required fields.")
-                return JsonResponse({'error': 'All fields (sender, receiver, amount, fee) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            if sender.balance < (amount + fee):
-                print("Insufficient balance.")
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            print(f"Transaction created with hash: {transaction.hash}")
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                    print(f"Transaction {transaction.hash} approved.")
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-                    print(f"Transaction {transaction.hash} not approved due to validation failure.")
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-                print(f"Approval failed for transaction {transaction.hash}: {str(e)}")
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            print(f"Broadcasting transaction {transaction.hash} to WebSocket and active nodes.")
-            broadcast_transaction(transaction_data)
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            print("Wallet not found.")
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            print(f"Error creating transaction: {str(e)}")
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 import requests
 from django.conf import settings
 
@@ -8045,72 +7633,6 @@ def get_network_congestion_factor_view(request):
         print(f"Unexpected error: {e}")
         return JsonResponse({'error': 'Unexpected error'}, status=500)
 
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-
-            if not sender_address or not receiver_address or not amount:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            # Calculate the fee based on the network congestion factor
-            congestion_factor = get_network_congestion_factor()
-            fee = amount * congestion_factor
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            async_to_sync(broadcast_transaction)(transaction_data)
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
-
 def dashboard(request):
     contract, created = Contract.objects.get_or_create(
         pk=1, 
@@ -8246,71 +7768,6 @@ def get_network_congestion_factor_view(request):
         print(f"Unexpected error: {e}")
         return JsonResponse({'error': 'Unexpected error'}, status=500)
 
-@csrf_exempt
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-
-            if not sender_address or not receiver_address or not amount:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            # Calculate the fee based on the network congestion factor
-            congestion_factor = get_network_congestion_factor()
-            fee = (amount * congestion_factor) / Decimal('100000000')
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            async_to_sync(broadcast_transaction)(transaction_data)
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 
 def dashboard(request):
     contract, created = Contract.objects.get_or_create(
@@ -8398,76 +7855,6 @@ def dashboard(request):
     }
 
     return render(request, 'dashboard.html', context)
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-
-            if not sender_address or not receiver_address or not amount:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            # Calculate the fee based on the network congestion factor
-            congestion_factor = get_network_congestion_factor()
-            fee = (amount * congestion_factor) / Decimal('100000000')
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "transactions_group", {
-                    "type": "chat_message",
-                    "message": json.dumps(transaction_data)
-                }
-            )
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 import urllib.parse
 
 def generate_magnet_link(ip, port):
@@ -8764,76 +8151,6 @@ def broadcast_transaction(transaction_data):
         }
     )
 
-def create_transaction(request):
-    if request.method == 'POST':
-        try:
-            sender_address = request.POST.get('sender')
-            receiver_address = request.POST.get('receiver')
-            amount = Decimal(request.POST.get('amount'))
-
-            if not sender_address or not receiver_address or not amount:
-                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
-
-            sender = Wallet.objects.get(address=sender_address)
-            receiver = Wallet.objects.get(address=receiver_address)
-            shard = Shard.objects.first()
-
-            # Calculate the fee based on the network congestion factor
-            congestion_factor = get_network_congestion_factor()
-            fee = (amount * congestion_factor) / Decimal('100000000')
-
-            if sender.balance < (amount + fee):
-                return JsonResponse({'error': 'Insufficient balance'}, status=400)
-
-            transaction = Transaction(
-                sender=sender,
-                receiver=receiver,
-                amount=amount,
-                fee=fee,
-                timestamp=timezone.now(),
-                shard=shard,
-                is_approved=False
-            )
-            transaction.hash = transaction.create_hash()
-            transaction.signature = "simulated_signature"
-            transaction.save()
-
-            # Attempt to approve the transaction immediately
-            try:
-                if validate_transaction(transaction):
-                    approve_transaction(transaction)
-                    message = 'Transaction created and approved'
-                else:
-                    message = 'Transaction created but not approved due to validation failure'
-            except Exception as e:
-                message = f'Transaction created but approval failed: {str(e)}'
-
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved,
-            }
-
-            # Broadcast the new transaction to the WebSocket group
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "transactions_group", {
-                    "type": "transaction_message",
-                    "message": transaction_data
-                }
-            )
-
-            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
-
-        except Wallet.DoesNotExist:
-            return JsonResponse({'error': 'Wallet not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
 # quantumapp/views.py
 
 from django.shortcuts import render
@@ -9432,3 +8749,84 @@ def receive_transaction(request):
         except Exception as e:
             return JsonResponse({"status": "error", "message": str(e)}, status=500)
     return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+# quantumapp/views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from .models import Wallet, Transaction, Shard
+from .utils import validate_transaction, generate_unique_hash
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            sender_address = request.POST.get('sender')
+            receiver_address = request.POST.get('receiver')
+            amount = Decimal(request.POST.get('amount'))
+
+            if not sender_address or not receiver_address or not amount:
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction = Transaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                timestamp=timezone.now(),
+                shard=shard,
+                is_approved=False
+            )
+            transaction.hash = generate_unique_hash()
+            transaction.signature = "simulated_signature"
+            transaction.save()
+
+            try:
+                if validate_transaction(transaction):
+                    approve_transaction(transaction)
+                    message = 'Transaction created and approved'
+                else:
+                    message = 'Transaction created but not approved due to validation failure'
+            except Exception as e:
+                message = f'Transaction created but approval failed: {str(e)}'
+
+            transaction_data = {
+                'transaction_hash': transaction.hash,
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'timestamp': transaction.timestamp.isoformat(),
+                'is_approved': transaction.is_approved,
+            }
+
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                "transactions_group", {
+                    "type": "transaction_message",
+                    "message": transaction_data
+                }
+            )
+
+            return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+        except Wallet.DoesNotExist:
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
