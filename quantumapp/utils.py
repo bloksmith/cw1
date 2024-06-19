@@ -223,3 +223,21 @@ def register_node(request):
         except Exception as e:
             return JsonResponse({"status": "error", "message": str(e)}, status=500)
     return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+# quantumapp/utils.py
+import websockets
+import asyncio
+import json
+from django.conf import settings
+from .models import Transaction
+
+async def broadcast_transaction(transaction_data):
+    nodes = Node.objects.all()
+    for node in nodes:
+        try:
+            async with websockets.connect(f"{node.address}/ws/transactions/") as websocket:
+                await websocket.send(json.dumps(transaction_data))
+        except Exception as e:
+            logger.error(f"Failed to broadcast to {node.address}: {e}")
+
+def sync_transaction(transaction_data):
+    asyncio.run(broadcast_transaction(transaction_data))

@@ -24,7 +24,7 @@ async def register_with_master_node_async():
         for attempt in range(retry_attempts):
             try:
                 async with websockets.connect(master_node_url) as websocket:
-                    await websocket.send(json.dumps({'url': current_node_url}))
+                    await websocket.send(json.dumps({'url': current_node_url, 'public_key': 'your_public_key_here'}))
                     response = await websocket.recv()
                     response_data = json.loads(response)
                     if response_data.get("status") == "success":

@@ -9310,3 +9310,94 @@ def register_node(request):
         except Exception as e:
             return JsonResponse({"status": "error", "message": str(e)}, status=500)
     return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+# quantumapp/views.py
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    try:
+        shard = Shard.objects.get(id=shard_id)
+    except Shard.DoesNotExist:
+        return JsonResponse({'error': 'Shard not found'}, status=404)
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    proof = proof_of_work(previous_block_hash)
+    miner_wallet = Wallet.objects.get(user=user)
+    system_wallet = ensure_system_wallet()
+
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+
+    if total_reward <= 0:
+        return JsonResponse({
+            'message': 'No reward due to supply cap. Skipping block mining.',
+            'proof': proof,
+            'reward': 0,
+            'fees': total_fees,
+            'total_reward': 0
+        })
+
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    dag[new_block_hash] = new_block
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+
+    broadcast_transactions(approved_transactions)
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+
+    return JsonResponse({
+        'message': f'Block mined successfully in shard {shard.name}',
+        'proof': proof,
+        'reward': block_reward,
+        'fees': total_fees,
+        'total_reward': total_reward
+    })
