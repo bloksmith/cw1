@@ -45,8 +45,9 @@ import os
 # settings.py
 import os
 
-MASTER_NODE_URL = os.getenv('MASTER_NODE_URL', 'ws://app.cashewstable.com/ws/register_node/')
-CURRENT_NODE_URL = os.getenv('CURRENT_NODE_URL', 'ws://app.cashewstable.com')
+# settings.py
+MASTER_NODE_URL = os.getenv('MASTER_NODE_URL', 'ws://app.cashewstable.com')
+CURRENT_NODE_URL = os.getenv('CURRENT_NODE_URL', 'ws://app3.cashewstable.com')
 
 # Define the path to the encryption key file
 key_path = BASE_DIR / 'secret.key'
