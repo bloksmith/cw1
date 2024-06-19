@@ -942,14 +942,16 @@ class RegisterNodeConsumer(AsyncWebsocketConsumer):
                 await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
         except Exception as e:
             await self.send(json.dumps({"status": "error", "message": str(e)}))
-
 import json
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
 
-nodes = []
+logger = logging.getLogger(__name__)
 
 class NodeRegisterConsumer(AsyncWebsocketConsumer):
     async def connect(self):
+        logger.debug(f"WebSocket connection attempt: {self.scope['path']} with headers {self.scope['headers']}")
         await self.accept()
         logger.info("NodeRegisterConsumer connected")
 
@@ -957,21 +959,32 @@ class NodeRegisterConsumer(AsyncWebsocketConsumer):
         logger.info(f"NodeRegisterConsumer disconnected: {close_code}")
 
     async def receive(self, text_data):
-        data = json.loads(text_data)
-        node_url = data.get("url")
-        public_key = data.get("public_key")
+        from .models import Node  # Ensure this import is within the method
 
-        if node_url and public_key:
-            node, created = Node.objects.get_or_create(address=node_url, defaults={'public_key': public_key})
-            if created:
-                await self.send(json.dumps({"status": "success", "message": "Node registered"}))
-                logger.info(f"Node registered: {node_url}")
+        logger.debug(f"Received data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            logger.debug(f"Parsed data: {data}")
+            node_url = data.get('url')
+            public_key = data.get('public_key')
+            logger.debug(f"Extracted node_url: {node_url}, public_key: {public_key}")
+
+            if node_url and public_key:
+                node, created = await sync_to_async(Node.objects.get_or_create)(
+                    address=node_url, defaults={'public_key': public_key}
+                )
+                if created:
+                    await self.send(json.dumps({"status": "success", "message": "Node registered"}))
+                    logger.info(f"Node registered: {node_url}")
+                else:
+                    await self.send(json.dumps({"status": "error", "message": "Node already registered"}))
+                    logger.info(f"Node already registered: {node_url}")
             else:
-                await self.send(json.dumps({"status": "error", "message": "Node already registered"}))
-                logger.info(f"Node already registered: {node_url}")
-        else:
-            await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
-            logger.error("Invalid data received")
+                await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
+                logger.error("Invalid data received")
+        except Exception as e:
+            logger.error(f"Error in receive method: {e}")
+            await self.send(json.dumps({"status": "error", "message": str(e)}))
 
 # quantumapp/consumers.py
 import json
