@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 import hashlib
+# quantumapp/consumers.py
 
 logger = logging.getLogger(__name__)
 
@@ -1161,15 +1162,18 @@ class SyncConsumer(AsyncWebsocketConsumer):
         return True
 
     async def register_with_master_node(self):
-        from .models import Node  # Importing inside the method
-        async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/') as websocket:
-            await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
-            response = await websocket.recv()
-            response_data = json.loads(response)
-            if response_data.get("status") == "success":
-                logger.info("Successfully registered with master node.")
-            else:
-                logger.error(f"Failed to register with master node. Response: {response_data}")
+        from .models import Node  # Importing inside the method                                                 
+        try:
+            async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/') as websocket:
+                await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("status") == "success":
+                    logger.info("Successfully registered with master node.")
+                else:
+                    logger.error(f"Failed to register with master node. Response: {response_data}")
+        except Exception as e:
+            logger.error(f"Error registering with master node: {e}")
 
 # For master node to handle new node registration
 class NodeRegisterConsumer(AsyncWebsocketConsumer):
@@ -1198,3 +1202,440 @@ class NodeRegisterConsumer(AsyncWebsocketConsumer):
         else:
             await self.send(json.dumps({"status": "error", "message": "Invalid data"}))
             logger.error("Invalid data received")
+        
+class SyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info(f"Node connected: {self.channel_name}")
+
+        # Register with master node if this is a slave node
+        if settings.CURRENT_NODE_URL != settings.MASTER_NODE_URL:
+            await self.register_with_master_node()
+
+    async def disconnect(self, close_code):
+        logger.info(f"Node disconnected: {self.channel_name}")
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        logger.debug(f"Received data: {data}")
+
+        if data.get('type') == 'transaction':
+            await self.handle_transaction(data['transaction'])
+        elif data.get('type') == 'block':
+            await self.handle_block(data['block'])
+    
+    async def handle_transaction(self, transaction_data):
+        from .models import Transaction  # Importing inside the method
+        logger.debug(f"Handling transaction: {transaction_data}")
+        transaction, created = await sync_to_async(Transaction.objects.get_or_create)(
+            hash=transaction_data['transaction_hash'],
+            defaults={
+                'sender': transaction_data['sender'],
+                'receiver': transaction_data['receiver'],
+                'amount': transaction_data['amount'],
+                'fee': transaction_data['fee'],
+                'timestamp': transaction_data['timestamp'],
+                'is_approved': transaction_data['is_approved'],
+            }
+        )
+        if created:
+            logger.info(f"Transaction {transaction.hash} synchronized successfully")
+        else:
+            logger.info(f"Transaction {transaction.hash} already exists")
+
+    async def handle_block(self, block_data):
+        logger.debug(f"Handling block: {block_data}")
+
+        # Create the block object
+        block = Block(
+            hash=block_data['hash'],
+            previous_hash=block_data['previous_hash'],
+            timestamp=datetime.fromisoformat(block_data['timestamp'])
+        )
+
+        # Add block to the DAG
+        if block.hash not in dag:
+            dag[block.hash] = block
+            if block.previous_hash in dag:
+                dag[block.previous_hash].children.append(block)
+
+        # Ensure the block is valid
+        if await self.validate_block(block):
+            logger.info(f"Block {block.hash} synchronized successfully")
+        else:
+            logger.error(f"Invalid block: {block_data['hash']}")
+
+    async def validate_block(self, block):
+        # Example validation: Check if the previous hash exists in the DAG
+        if block.previous_hash and block.previous_hash not in dag:
+            logger.error(f"Invalid previous hash for block {block.hash}")
+            return False
+        return True
+
+    async def register_with_master_node(self):
+        from .models import Node  # Importing inside the method
+        try:
+            async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/') as websocket:
+                await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("status") == "success":
+                    logger.info("Successfully registered with master node.")
+                else:
+                    logger.error(f"Failed to register with master node. Response: {response_data}")
+        except Exception as e:
+            logger.error(f"Error registering with master node: {e}")
+import json
+import logging
+from datetime import datetime
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+class SyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info(f"Node connected: {self.channel_name}")
+
+        # Register with master node if this is a slave node
+        if settings.CURRENT_NODE_URL != settings.MASTER_NODE_URL:
+            await self.register_with_master_node()
+
+    async def disconnect(self, close_code):
+        logger.info(f"Node disconnected: {self.channel_name}")
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        logger.debug(f"Received data: {data}")
+
+        if data.get('type') == 'transaction':
+            await self.handle_transaction(data['transaction'])
+        elif data.get('type') == 'block':
+            await self.handle_block(data['block'])
+    
+    async def handle_transaction(self, transaction_data):
+        from .models import Transaction  # Importing inside the method
+        logger.debug(f"Handling transaction: {transaction_data}")
+        transaction, created = await sync_to_async(Transaction.objects.get_or_create)(
+            hash=transaction_data['transaction_hash'],
+            defaults={
+                'sender': transaction_data['sender'],
+                'receiver': transaction_data['receiver'],
+                'amount': transaction_data['amount'],
+                'fee': transaction_data['fee'],
+                'timestamp': transaction_data['timestamp'],
+                'is_approved': transaction_data['is_approved'],
+            }
+        )
+        if created:
+            logger.info(f"Transaction {transaction.hash} synchronized successfully")
+        else:
+            logger.info(f"Transaction {transaction.hash} already exists")
+
+    async def handle_block(self, block_data):
+        logger.debug(f"Handling block: {block_data}")
+
+        # Create the block object
+        block = Block(
+            hash=block_data['hash'],
+            previous_hash=block_data['previous_hash'],
+            timestamp=datetime.fromisoformat(block_data['timestamp'])
+        )
+
+        # Add block to the DAG
+        if block.hash not in dag:
+            dag[block.hash] = block
+            if block.previous_hash in dag:
+                dag[block.previous_hash].children.append(block)
+
+        # Ensure the block is valid
+        if await self.validate_block(block):
+            logger.info(f"Block {block.hash} synchronized successfully")
+        else:
+            logger.error(f"Invalid block: {block_data['hash']}")
+
+    async def validate_block(self, block):
+        # Example validation: Check if the previous hash exists in the DAG
+        if block.previous_hash and block.previous_hash not in dag:
+            logger.error(f"Invalid previous hash for block {block.hash}")
+            return False
+        return True
+
+    async def register_with_master_node(self):
+        from .models import Node  # Importing inside the method                                                 
+        try:
+            async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/') as websocket:
+                await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("status") == "success":
+                    logger.info("Successfully registered with master node.")
+                else:
+                    logger.error(f"Failed to register with master node. Response: {response_data}")
+        except Exception as e:
+            logger.error(f"Error registering with master node: {e}")
+class SyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info(f"Node connected: {self.channel_name}")
+
+        # Register with master node if this is a slave node
+        if settings.CURRENT_NODE_URL != settings.MASTER_NODE_URL:
+            await self.register_with_master_node()
+
+    async def disconnect(self, close_code):
+        logger.info(f"Node disconnected: {self.channel_name}")
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        logger.debug(f"Received data: {data}")
+
+        if data.get('type') == 'transaction':
+            await self.handle_transaction(data['transaction'])
+        elif data.get('type') == 'block':
+            await self.handle_block(data['block'])
+    
+    async def handle_transaction(self, transaction_data):
+        from .models import Transaction  # Importing inside the method
+        logger.debug(f"Handling transaction: {transaction_data}")
+        transaction, created = await sync_to_async(Transaction.objects.get_or_create)(
+            hash=transaction_data['transaction_hash'],
+            defaults={
+                'sender': transaction_data['sender'],
+                'receiver': transaction_data['receiver'],
+                'amount': transaction_data['amount'],
+                'fee': transaction_data['fee'],
+                'timestamp': transaction_data['timestamp'],
+                'is_approved': transaction_data['is_approved'],
+            }
+        )
+        if created:
+            logger.info(f"Transaction {transaction.hash} synchronized successfully")
+        else:
+            logger.info(f"Transaction {transaction.hash} already exists")
+
+    async def handle_block(self, block_data):
+        logger.debug(f"Handling block: {block_data}")
+
+        # Create the block object
+        block = Block(
+            hash=block_data['hash'],
+            previous_hash=block_data['previous_hash'],
+            timestamp=datetime.fromisoformat(block_data['timestamp'])
+        )
+
+        # Add block to the DAG
+        if block.hash not in dag:
+            dag[block.hash] = block
+            if block.previous_hash in dag:
+                dag[block.previous_hash].children.append(block)
+
+        # Ensure the block is valid
+        if await self.validate_block(block):
+            logger.info(f"Block {block.hash} synchronized successfully")
+        else:
+            logger.error(f"Invalid block: {block_data['hash']}")
+
+    async def validate_block(self, block):
+        # Example validation: Check if the previous hash exists in the DAG
+        if block.previous_hash and block.previous_hash not in dag:
+            logger.error(f"Invalid previous hash for block {block.hash}")
+            return False
+        return True
+
+    async def register_with_master_node(self):
+        from .models import Node  # Importing inside the method                                                 
+        try:
+            async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/', timeout=10) as websocket:
+                await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                if response_data.get("status") == "success":
+                    logger.info("Successfully registered with master node.")
+                else:
+                    logger.error(f"Failed to register with master node. Response: {response_data}")
+        except (websockets.exceptions.InvalidStatusCode, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as e:
+            logger.error(f"Error registering with master node: {e}\n{traceback.format_exc()}")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}\n{traceback.format_exc()}")
+            
+class SyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info(f"Node connected: {self.channel_name}")
+
+        # Register with master node if this is a slave node
+        if settings.CURRENT_NODE_URL != settings.MASTER_NODE_URL:
+            await self.register_with_master_node()
+
+    async def disconnect(self, close_code):
+        logger.info(f"Node disconnected: {self.channel_name}")
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        logger.debug(f"Received data: {data}")
+
+        if data.get('type') == 'transaction':
+            await self.handle_transaction(data['transaction'])
+        elif data.get('type') == 'block':
+            await self.handle_block(data['block'])
+        elif data.get('type') == 'node_registration':
+            await self.handle_node_registration(data['node_info'])
+
+    async def handle_transaction(self, transaction_data):
+        from .models import Transaction  # Importing inside the method
+        logger.debug(f"Handling transaction: {transaction_data}")
+        try:
+            transaction, created = await sync_to_async(Transaction.objects.get_or_create)(
+                hash=transaction_data['transaction_hash'],
+                defaults={
+                    'sender': transaction_data['sender'],
+                    'receiver': transaction_data['receiver'],
+                    'amount': transaction_data['amount'],
+                    'fee': transaction_data['fee'],
+                    'timestamp': transaction_data['timestamp'],
+                    'is_approved': transaction_data['is_approved'],
+                }
+            )
+            if created:
+                logger.info(f"Transaction {transaction.hash} synchronized successfully")
+            else:
+                logger.info(f"Transaction {transaction.hash} already exists")
+        except Exception as e:
+            logger.error(f"Error handling transaction: {e}\n{traceback.format_exc()}")
+
+    async def handle_block(self, block_data):
+        logger.debug(f"Handling block: {block_data}")
+        try:
+            # Create the block object
+            block = Block(
+                hash=block_data['hash'],
+                previous_hash=block_data['previous_hash'],
+                timestamp=datetime.fromisoformat(block_data['timestamp'])
+            )
+
+            # Add block to the DAG
+            if block.hash not in dag:
+                dag[block.hash] = block
+                if block.previous_hash in dag:
+                    dag[block.previous_hash].children.append(block)
+
+            # Ensure the block is valid
+            if await self.validate_block(block):
+                logger.info(f"Block {block.hash} synchronized successfully")
+            else:
+                logger.error(f"Invalid block: {block_data['hash']}")
+        except Exception as e:
+            logger.error(f"Error handling block: {e}\n{traceback.format_exc()}")
+
+    async def validate_block(self, block):
+        try:
+            # Example validation: Check if the previous hash exists in the DAG
+            if block.previous_hash and block.previous_hash not in dag:
+                logger.error(f"Invalid previous hash for block {block.hash}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Error validating block: {e}\n{traceback.format_exc()}")
+            return False
+
+    async def register_with_master_node(self):
+        from .models import Node  # Importing inside the method
+        try:
+            logger.info(f"Attempting to connect to master node at {settings.MASTER_NODE_URL}")
+            async with websockets.connect(settings.MASTER_NODE_URL + '/ws/register_node/', timeout=10) as websocket:
+                logger.info(f"Connected to master node: {settings.MASTER_NODE_URL}")
+                await websocket.send(json.dumps({'url': settings.CURRENT_NODE_URL, 'public_key': 'your_public_key_here'}))
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                logger.debug(f"Response from master node: {response_data}")
+                if response_data.get("status") == "success":
+                    logger.info("Successfully registered with master node.")
+                else:
+                    logger.error(f"Failed to register with master node. Response: {response_data}")
+        except (websockets.exceptions.InvalidStatusCode, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as e:
+            logger.error(f"Error registering with master node: {e}\n{traceback.format_exc()}")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}\n{traceback.format_exc()}")
+
+    async def handle_node_registration(self, node_info):
+        from .models import Node  # Importing inside the method
+        logger.debug(f"Handling node registration: {node_info}")
+        try:
+            node, created = await sync_to_async(Node.objects.get_or_create)(
+                url=node_info['url'],
+                defaults={
+                    'public_key': node_info['public_key'],
+                    'is_master': node_info['is_master'],
+                }
+            )
+            if created:
+                logger.info(f"Node {node.url} registered successfully")
+            else:
+                logger.info(f"Node {node.url} already exists")
+        except Exception as e:
+            logger.error(f"Error handling node registration: {e}\n{traceback.format_exc()}")
+class NodeRegisterConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info("NodeRegisterConsumer connected")
+
+    async def disconnect(self, close_code):
+        logger.info(f"NodeRegisterConsumer disconnected with close code {close_code}")
+
+    async def receive(self, text_data):
+        logger.debug(f"Received message: {text_data}")
+        message = json.loads(text_data)
+        
+        try:
+            from quantumapp.models import Node  # Import within the method
+            node, created = await sync_to_async(Node.objects.get_or_create)(
+                url=message["url"]
+            )
+            if created:
+                logger.info(f"Node created: {node}")
+            else:
+                logger.info(f"Node already exists: {node}")
+        except Exception as e:
+            logger.error(f"Error in receive method: {e}\n{traceback.format_exc()}")
+            await self.close()
+
+    async def send_message(self, message):
+        await self.send(text_data=json.dumps(message))
+import json
+import logging
+import traceback
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+
+logger = logging.getLogger(__name__)
+
+class NodeRegisterConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.accept()
+        logger.info("NodeRegisterConsumer connected")
+
+    async def disconnect(self, close_code):
+        logger.info(f"NodeRegisterConsumer disconnected with close code {close_code}")
+
+    async def receive(self, text_data):
+        logger.debug(f"Received message: {text_data}")
+        message = json.loads(text_data)
+        
+        try:
+            from quantumapp.models import Node  # Import within the method
+            node, created = await sync_to_async(Node.objects.get_or_create)(
+                address=message["url"]
+            )
+            if created:
+                logger.info(f"Node created: {node}")
+            else:
+                logger.info(f"Node already exists: {node}")
+        except Exception as e:
+            logger.error(f"Error in receive method: {e}\n{traceback.format_exc()}")
+            await self.close()
+
+    async def send_message(self, message):
+        await self.send(text_data=json.dumps(message))
