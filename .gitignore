@@ -13,3 +13,4 @@ new-env/lib/python3.9/site-packages/symengine/lib/symengine_wrapper.cpython-39-x
 debug.log
 largefiles.txt
 largefiles.txt
+.env
