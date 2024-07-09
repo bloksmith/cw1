@@ -1,0 +1,20 @@
+[0;1;32m●[0m daphne-myquantumproject.service
+     Loaded: loaded (/etc/systemd/system/daphne-myquantumproject.service; enabled; vendor preset: enabled)
+     Active: [0;1;32mactive (running)[0m since Mon 2024-06-24 06:16:29 UTC; 7s ago
+   Main PID: 1894698 (daphne)
+      Tasks: 2 (limit: 9487)
+     Memory: 128.5M
+        CPU: 2.496s
+     CGroup: /system.slice/daphne-myquantumproject.service
+             └─1894698 /usr/local/bin/python3.9 /usr/local/bin/daphne -u /run/daphne-myquantumproject/daphne.sock myquantumproject.asgi:application -b 0.0.0.0 -p 9001
+
+Jun 24 06:16:31 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]: ModuleNotFoundError: No module named 'websockets'
+Jun 24 06:16:31 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]: 2024-06-24 06:16:31,829 INFO     Retrying in 5 seconds... (Attempt 1/5)
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]: 2024-06-24 06:16:36,927 ERROR    Script failed with return code 1. Error: Traceback (most recent call last):
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]:   File "/home/myuser/myquantumproject/./quantumapp/register_with_master.py", line 2, in <module>
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]:     import websockets
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]: ModuleNotFoundError: No module named 'websockets'
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 daphne[1894698]: 2024-06-24 06:16:36,928 INFO     Retrying in 5 seconds... (Attempt 2/5)
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185m/etc/systemd/system/daphne-myquantumproject.service:1: Assignment outside of section. Ignoring.[0m
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185m/etc/systemd/system/daphne-myquantumproject.service:2: Assignment outside of section. Ignoring.[0m
+Jun 24 06:16:36 debian-s-1vcpu-512mb-10gb-fra1-01 systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185m/etc/systemd/system/daphne-myquantumproject.service:3: Assignment outside of section. Ignoring.[0m

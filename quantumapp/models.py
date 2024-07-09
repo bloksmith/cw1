@@ -106,6 +106,7 @@ class Transaction(models.Model):
     shard = models.ForeignKey(Shard, on_delete=models.CASCADE, related_name='transactions')
     parents = models.ManyToManyField('self', symmetrical=False, related_name='children')
     is_mining_reward = models.BooleanField(default=False)  # Add this field if needed
+    batch_processed = models.BooleanField(default=False)
 
     def create_hash(self):
         sha = hashlib.sha256()
@@ -285,3 +286,36 @@ class TokenQuote(models.Model):
 
     def __str__(self):
         return f"{self.from_token} to {self.to_token} at {self.price} on {self.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+from django.db import models
+
+class Block(models.Model):
+    hash = models.CharField(max_length=64, unique=True)
+    previous_hash = models.CharField(max_length=64)
+    timestamp = models.DateTimeField()
+    # Add transient children attribute, not persisted in the database
+    children = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.children = []
+
+from django.db import models
+from django.utils import timezone
+
+class PendingTransaction(models.Model):
+    sender = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='pending_sender')
+    receiver = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='pending_receiver')
+    amount = models.DecimalField(max_digits=20, decimal_places=8)
+    fee = models.DecimalField(max_digits=20, decimal_places=8)
+    timestamp = models.DateTimeField(default=timezone.now)
+    hash = models.CharField(max_length=64)
+    signature = models.CharField(max_length=256)
+from django.db import models
+
+class Peer(models.Model):
+    address = models.CharField(max_length=255)
+    peer_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.peer_id} @ {self.address}"

@@ -101,7 +101,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 def load_key():
-    key_path = 'secret.key'
+    key_path = '/home/myuser/secret.key'
     if os.path.exists(key_path):
         with open(key_path, 'rb') as key_file:
             key = key_file.read()
@@ -168,7 +168,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 def load_key():
-    key_path = '/root/secret.key'
+    key_path = '/home/myuser/secret.key'
     if os.path.exists(key_path):
         with open(key_path, 'rb') as key_file:
             key = key_file.read()

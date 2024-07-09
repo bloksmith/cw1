@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sync Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+        }
+        .details {
+            border: 1px solid #ccc;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+    </style>
+    <script>
+        async function fetchSyncDetails() {
+            const response = await fetch('/get_sync_details/');
+            const data = await response.json();
+            document.getElementById('peer_id').innerText = data.peer_id || 'None';
+            document.getElementById('multiaddress').innerText = data.multiaddress || 'None';
+            document.getElementById('hint').innerText = data.hint || 'None';
+        }
+        window.onload = fetchSyncDetails;
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Peer-to-Peer Sync</h1>
+        <div class="details">
+            <p><strong>Peer ID:</strong> <span id="peer_id">Loading...</span></p>
+            <p><strong>Multiaddress:</strong> <span id="multiaddress">Loading...</span></p>
+            <p><strong>Hint:</strong> <span id="hint">Loading...</span></p>
+        </div>
+        <div class="details">
+            <h2>Sync Log</h2>
+            <pre id="sync_log">Loading...</pre>
+        </div>
+    </div>
+</body>
+</html>

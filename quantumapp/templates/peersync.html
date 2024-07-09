@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peer Sync Web UI</title>
+    <script type="text/javascript">
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        function validateInputs(masterUrl, peerInfo) {
+            if (!masterUrl) {
+                alert("Master URL is required");
+                return false;
+            }
+            if (!peerInfo) {
+                alert("Peer Info is required");
+                return false;
+            }
+            try {
+                JSON.parse(peerInfo);
+            } catch (e) {
+                alert("Invalid JSON format for Peer Info");
+                return false;
+            }
+            return true;
+        }
+
+        async function registerPeer() {
+            const masterUrl = document.getElementById('registerPeerMasterUrl').value;
+            const peerInfo = document.getElementById('registerPeerInfo').value;
+            const csrfToken = getCookie('csrftoken');
+
+            if (!validateInputs(masterUrl, peerInfo)) {
+                return;
+            }
+
+            console.log("Data being sent to server:", { master_url: masterUrl, peer_info: peerInfo });
+
+            const response = await fetch('/register_peer/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({ master_url: masterUrl, peer_info: peerInfo })
+            });
+
+            const data = await response.json();
+            let responseText = JSON.stringify(data.result, null, 2);
+            if (data.error) {
+                responseText += `\nTraceback:\n${data.traceback}`;
+            }
+            document.getElementById('registerPeerResponse').innerText = responseText;
+            displayLogs(data.logs);
+        }
+
+        async function getPeers() {
+            const masterUrl = document.getElementById('getPeersMasterUrl').value;
+            const csrfToken = getCookie('csrftoken');
+
+            if (!masterUrl) {
+                alert("Master URL is required");
+                return;
+            }
+
+            const response = await fetch('/get_peers/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({ master_url: masterUrl })
+            });
+
+            const data = await response.json();
+            let responseText = JSON.stringify(data.result, null, 2);
+            if (data.error) {
+                responseText += `\nTraceback:\n${data.traceback}`;
+            }
+            document.getElementById('getPeersResponse').innerText = responseText;
+            displayLogs(data.logs);
+        }
+
+        async function startSync() {
+            const port = document.getElementById('startSyncPort').value;
+            const masterUrl = document.getElementById('startSyncMasterUrl').value;
+            const csrfToken = getCookie('csrftoken');
+
+            if (!port) {
+                alert("Port is required");
+                return;
+            }
+            if (!masterUrl) {
+                alert("Master URL is required");
+                return;
+            }
+
+            const response = await fetch('/start_sync/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({ port: port, master_url: masterUrl })
+            });
+
+            const data = await response.json();
+            let responseText = JSON.stringify(data, null, 2);
+            if (data.error) {
+                responseText += `\nTraceback:\n${data.traceback}`;
+            }
+            document.getElementById('startSyncResponse').innerText = responseText;
+            displayLogs(data.logs);
+        }
+
+        function displayLogs(logs) {
+            const logContainer = document.getElementById('logContainer');
+            logContainer.innerHTML = '';
+            logs.forEach(log => {
+                const logItem = document.createElement('div');
+                logItem.textContent = log;
+                logContainer.appendChild(logItem);
+            });
+        }
+
+        window.onload = function() {
+            // Automatically fill fields with default values
+            document.getElementById('registerPeerMasterUrl').value = "ws://localhost:8765";
+            document.getElementById('registerPeerInfo').value = '{ "address": "/ip4/127.0.0.1/tcp/8001", "peer_id": "Qma6CchKfBkVRc29wfcYkLL5tkB91gbRS9NLMjdMnEHnL7" }';
+            document.getElementById('getPeersMasterUrl').value = "ws://localhost:8765";
+            document.getElementById('startSyncPort').value = "8001";
+            document.getElementById('startSyncMasterUrl').value = "ws://localhost:8765";
+        }
+    </script>
+    <style>
+        .title {
+            font-size: 2em;
+            text-align: center;
+        }
+        .section-title {
+            font-size: 1.5em;
+            margin-top: 20px;
+        }
+        .input-field {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .action-button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .response {
+            margin-top: 10px;
+            font-style: italic;
+            white-space: pre-wrap; /* Preserve whitespace and line breaks */
+        }
+        #logContainer {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            max-height: 300px;
+            overflow-y: scroll;
+        }
+    </style>
+</head>
+<body>
+    <h1 class="title">Peer Sync Web UI</h1>
+    <div>
+        <h2 class="section-title">Register Peer</h2>
+        <input id="registerPeerMasterUrl" class="input-field" type="text" placeholder="Master URL" />
+        <textarea id="registerPeerInfo" class="input-field" placeholder="Peer Info"></textarea>
+        <button class="action-button" onclick="registerPeer()">Register Peer</button>
+        <pre id="registerPeerResponse" class="response"></pre>
+    </div>
+    <div>
+        <h2 class="section-title">Get Peers</h2>
+        <input id="getPeersMasterUrl" class="input-field" type="text" placeholder="Master URL" />
+        <button class="action-button" onclick="getPeers()">Get Peers</button>
+        <pre id="getPeersResponse" class="response"></pre>
+    </div>
+    <div>
+        <h2 class="section-title">Start Sync</h2>
+        <input id="startSyncPort" class="input-field" type="text" placeholder="Port" />
+        <input id="startSyncMasterUrl" class="input-field" type="text" placeholder="Master URL" />
+        <button class="action-button" onclick="startSync()">Start Sync</button>
+        <pre id="startSyncResponse" class="response"></pre>
+    </div>
+    <div id="logContainer" class="section-title">
+        <h2>Logs</h2>
+    </div>
+</body>
+</html>

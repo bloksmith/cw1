@@ -23,6 +23,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-2=$#0acnlz$wh!1-o888amt(f=_-(g-^t!z(pn6bb04zh65xtp'
+ALCHEMY_URL ='https://polygon-mainnet.g.alchemy.com/v2/sNOfDTwDOfYJ4_vJDjklvSU11JrxGFEG'
+
+import os
+from dotenv import load_dotenv
+import solcx
+import tempfile
+import os
+ANCHOR_CONTRACT_ADDRESS = '0xc39132F4c92849c432743BE42950D9aC0ba8031b'
+# Create a custom temporary directory
+solcx_temp_dir = tempfile.mkdtemp()
+
+# Set environment variable to use the custom directory
+os.environ['SOLCX_TEMP_DIR'] = solcx_temp_dir
+
+# Ensure the directory is writable
+os.makedirs(solcx_temp_dir, exist_ok=True)
+os.chmod(solcx_temp_dir, 0o777)
+# Load environment variables from .env file
+load_dotenv()
+
+# Assign variables from environment
+ALCHEMY_URL = os.getenv('ALCHEMY_URL')
+PRIVATE_KEY = os.getenv('PRIVATE_KEY')
+ACCOUNT_ADDRESS = os.getenv('ACCOUNT_ADDRESS')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -158,7 +182,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'myquantumproject.wsgi.application'
+WSGI_APPLICATION = 'quantumapp.wsgi.application'
 
 # Database
 DATABASES = {
@@ -197,7 +221,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-ASGI_APPLICATION = 'myquantumproject.asgi.application'
+ASGI_APPLICATION = 'quantumapp.asgi.application'
 
 CHANNEL_LAYERS = {
     "default": {
@@ -210,28 +234,61 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {
         'console': {
-            'level': 'DEBUG',
             'class': 'logging.StreamHandler',
-        },
-        'file': {
-            'level': 'DEBUG',
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'debug.log'),
         },
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console'],
+            'level': 'DEBUG',
+        },
+    },
+}
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',  # Ensure this path is correct
+    }
+}
+# settings.py
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': 'debug.log',
+            'formatter': 'verbose',
+        },
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['file', 'console'],
+        'level': 'DEBUG',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file', 'console'],
             'level': 'DEBUG',
             'propagate': True,
         },
         'myquantumproject': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
-            'propagate': True,
-        },
-        'channels': {
-            'handlers': ['console', 'file'],
+            'handlers': ['file', 'console'],
             'level': 'DEBUG',
             'propagate': True,
         },

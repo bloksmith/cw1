@@ -52,6 +52,23 @@ urlpatterns = [
     re_path(r'ws/nodes/$', consumers.NodeConsumer.as_asgi()),
     path('recent_transactions/', views.recent_transactions, name='recent_transactions'),
     path('nodes/', views.node_list, name='node_list'),
+    path('deploy/', views.deploy_view, name='deploy_contract'),
+    path('submit_rollup/', views.submit_rollup, name='submit_rollup'),
+    path('dispute_rollup/', views.dispute_rollup, name='dispute_rollup'),
+    path('finalize_rollup/', views.finalize_rollup, name='finalize_rollup'),
+    path('get_stake/', views.get_stake, name='get_stake'),
+    path('claim_rewards/', views.claim_rewards, name='claim_rewards'),
+    path('open_state_channel/', views.open_state_channel, name='open_state_channel'),
+    path('update_state_channel/', views.update_state_channel, name='update_state_channel'),
+    path('close_state_channel/', views.close_state_channel, name='close_state_channel'),
+    path('rollup_operations/', views.rollup_operations_view, name='rollup_operations'),
+    path('sync/', views.sync_view, name='sync'),
+    path('get_sync_details/', views.get_sync_details, name='get_sync_details'),
+    path('peersync/', views.peersync, name='peersync'),
+    path('register_peer/', views.register_peer, name='register_peer'),
+    path('get_peers/', views.get_peers, name='get_peers'),
+    path('scalping/', views.scalping_view, name='scalping'),
+    path('start_sync/', views.start_sync, name='start_sync'),
 
 
 

@@ -5,17 +5,19 @@ import logging
 import traceback
 from django.conf import settings
 import django
+import os
+import django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'quantumapp.settings')
 
-# Initialize Django settings
-django.setup()
+
 
 logger = logging.getLogger(__name__)
 
 async def register_with_master_node_async():
     master_node_url = settings.MASTER_NODE_URL + '/ws/register_node/'
     current_node_url = settings.CURRENT_NODE_URL
-    retry_attempts = 5
-    retry_delay = 5
+    retry_attempts = 1
+    retry_delay = 1
 
     logger.debug(f"MASTER_NODE_URL: {settings.MASTER_NODE_URL}")
     logger.debug(f"CURRENT_NODE_URL: {settings.CURRENT_NODE_URL}")

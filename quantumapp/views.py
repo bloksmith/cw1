@@ -2353,6 +2353,10 @@ def register(request):
             balance = get_wallet_balance(wallet_data['public_key'])
             logger.debug(f"Retrieved wallet balance: {balance}")
 
+            # Sync with peers after wallet creation
+            destination = request.POST.get('destination', '')
+            sync_with_peers(destination)
+
             return JsonResponse({
                 'message': 'User and wallet created',
                 'public_key': wallet.public_key,
@@ -6401,45 +6405,7 @@ def broadcast_transaction(transaction):
         except requests.exceptions.RequestException as e:
             print(f"Error broadcasting transaction to {node['url']}: {e}")
 
-def mine_single_block(user, shard_id):
-    global mining_statistics
-    try:
-        shard = Shard.objects.get(id=shard_id)
-    except Shard.DoesNotExist:
-        print("Shard not found")
-        return JsonResponse({'error': 'Shard not found'}, status=404)
 
-    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
-    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
-    proof = proof_of_work(previous_block_hash)
-    miner_wallet = Wallet.objects.get(user=user)
-    system_wallet = ensure_system_wallet()
-
-    total_fees = Decimal(0)
-    for transaction in transactions:
-        print(f"Validating transaction {transaction.hash}")
-        if validate_transaction(transaction):
-            transaction.is_approved = True
-            transaction.save()
-            total_fees += Decimal(transaction.fee)
-            print(f"Transaction {transaction.hash} approved. Fee: {transaction.fee}")
-
-            # Broadcast the approved transaction
-            transaction_data = {
-                'transaction_hash': transaction.hash,
-                'sender': transaction.sender.address,
-                'receiver': transaction.receiver.address,
-                'amount': str(transaction.amount),
-                'fee': str(transaction.fee),
-                'timestamp': transaction.timestamp.isoformat(),
-                'is_approved': transaction.is_approved
-            }
-            broadcast_transaction(transaction_data)
-
-        else:
-            print(f"Transaction {transaction.hash} was not approved")
-
-    # ... rest of the code remains unchanged ...
 from django.views.decorators.csrf import csrf_exempt
 
 @csrf_exempt
@@ -8630,17 +8596,24 @@ def register_node(request):
 # quantumapp/views.py
 def mine_single_block(user, shard_id):
     global mining_statistics
+
     try:
         shard = Shard.objects.get(id=shard_id)
     except Shard.DoesNotExist:
+        logger.error("Shard not found")
         return JsonResponse({'error': 'Shard not found'}, status=404)
 
     transactions = Transaction.objects.filter(is_approved=False, shard=shard)
     previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
     proof = proof_of_work(previous_block_hash)
-    miner_wallet = Wallet.objects.get(user=user)
-    system_wallet = ensure_system_wallet()
 
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return JsonResponse({'error': 'Miner wallet not found'}, status=404)
+
+    system_wallet = ensure_system_wallet()
     total_fees = Decimal(0)
     approved_transactions = []
 
@@ -8691,7 +8664,10 @@ def mine_single_block(user, shard_id):
     )
     reward_transaction.save()
 
+    # Broadcast the approved transactions
     broadcast_transactions(approved_transactions)
+
+    # Broadcast the reward transaction
     broadcast_transaction({
         'transaction_hash': reward_transaction.hash,
         'sender': reward_transaction.sender.address,
@@ -8701,6 +8677,11 @@ def mine_single_block(user, shard_id):
         'timestamp': reward_transaction.timestamp.isoformat(),
         'is_approved': reward_transaction.is_approved
     })
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
 
     mining_statistics["blocks_mined"] += 1
     mining_statistics["total_rewards"] += float(total_reward)
@@ -8718,6 +8699,10 @@ def mine_single_block(user, shard_id):
         'fees': total_fees,
         'total_reward': total_reward
     })
+def create_anchor_hash(transactions):
+    tx_data = ''.join([tx.hash for tx in transactions])
+    return hashlib.sha256(tx_data.encode('utf-8')).hexdigest()
+
 def receive_transaction(request):
     if request.method == 'POST':
         try:
@@ -8862,3 +8847,8593 @@ async def register_with_master_node_async():
         logger.error("Max retry attempts reached. Could not register with master node.")
     else:
         logger.error("MASTER_NODE_URL or CURRENT_NODE_URL is not set.")
+import json
+import solcx
+from web3 import Web3
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Assign variables from environment
+ALCHEMY_URL = os.getenv('ALCHEMY_URL')
+PRIVATE_KEY = os.getenv('PRIVATE_KEY')
+ACCOUNT_ADDRESS = os.getenv('ACCOUNT_ADDRESS')
+CONTRACT_ADDRESS = '0xc39132F4c92849c432743BE42950D9aC0ba8031b'
+CONTRACT_ABI = json.loads("""
+[
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "name": "owner",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "spender",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "name": "value",
+                "type": "uint256"
+            }
+        ],
+        "name": "Approval",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "name": "from",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "name": "value",
+                "type": "uint256"
+            }
+        ],
+        "name": "Transfer",
+        "type": "event"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "name",
+        "outputs": [
+            {
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_spender",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "approve",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            {
+                "name": "_owner",
+                "type": "address"
+            }
+        ],
+        "name": "balanceOf",
+        "outputs": [
+            {
+                "name": "balance",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint8"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [
+            {
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_to",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "transfer",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_from",
+                "type": "address"
+            },
+            {
+                "name": "_to",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "transferFrom",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            {
+                "name": "_owner",
+                "type": "address"
+            },
+            {
+                "name": "_spender",
+                "type": "address"
+            }
+        ],
+        "name": "allowance",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "batch_hash",
+                "type": "bytes32"
+            },
+            {
+                "name": "proof",
+                "type": "bytes"
+            }
+        ],
+        "name": "submitRollup",
+        "outputs": [],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "batch_hash",
+                "type": "bytes32"
+            }
+        ],
+        "name": "disputeRollup",
+        "outputs": [],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "batch_hash",
+                "type": "bytes32"
+            }
+        ],
+        "name": "finalizeRollup",
+        "outputs": [],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]
+""")
+
+
+# Set up solc
+#solcx.install_solc('0.8.20')
+#solcx.set_solc_version('0.8.20')
+CONTRACT_ADDRESS = "0x7164204f4683D6116a724dA9295F599c0Bab24c3"  # Address of the smart contract
+
+# Connect to Polygon Alchemy
+alchemy_url = settings.ALCHEMY_URL  # Update your settings.py to include this URL
+web3 = Web3(Web3.HTTPProvider("https://polygon-mainnet.g.alchemy.com/v2/sNOfDTwDOfYJ4_vJDjklvSU11JrxGFEG"))
+POLYGON_RPC_URL = 'https://polygon-rpc.com/'
+def submit_anchor_to_polygon(anchor_hash, user_private_key, user_address):
+    try:
+        # Create the contract instance
+        contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+        # Create the transaction
+        nonce = web3.eth.get_transaction_count(user_address)
+        txn = contract.functions.submitAnchor(anchor_hash).buildTransaction({
+            'chainId': 137,  # Polygon mainnet chain ID
+            'gas': 2000000,
+            'gasPrice': web3.toWei('50', 'gwei'),
+            'nonce': nonce,
+        })
+
+        # Sign the transaction
+        signed_txn = web3.eth.account.sign_transaction(txn, private_key=user_private_key)
+
+        # Send the transaction
+        tx_hash = web3.eth.sendRawTransaction(signed_txn.rawTransaction)
+        logger.info(f"Transaction sent with hash: {tx_hash.hex()}")
+
+        # Wait for the transaction receipt
+        receipt = web3.eth.waitForTransactionReceipt(tx_hash)
+        if receipt.status == 1:
+            logger.info(f"Transaction successful with hash: {tx_hash.hex()}")
+        else:
+            logger.error(f"Transaction failed with hash: {tx_hash.hex()}")
+
+        return tx_hash.hex()
+    except Exception as e:
+        logger.error(f"Error submitting anchor to Polygon: {e}")
+        return None
+
+def compile_contract():
+    try:
+        with open('/home/myuser/myquantumproject/my-token-project/dagknight.sol', 'r') as file:
+            contract_source_code = file.read()
+        compiled_sol = solcx.compile_source(contract_source_code)
+        contract_interface = compiled_sol['<stdin>:IntegratedSystem']
+        return contract_interface
+    except Exception as e:
+        logger.error(f"Error compiling contract: {e}")
+        raise
+
+# Estimate gas and deployment cost
+def estimate_gas_and_cost(contract_interface, web3, account):
+    try:
+        contract = web3.eth.contract(abi=contract_interface['abi'], bytecode=contract_interface['bin'])
+        transaction = {
+            'from': account,
+            'data': contract.bytecode,
+            'gasPrice': web3.eth.gas_price,
+            'nonce': web3.eth.get_transaction_count(account),
+        }
+        gas_estimate = web3.eth.estimate_gas(transaction)
+        gas_price = web3.eth.gas_price
+        deployment_cost = gas_estimate * gas_price
+        logger.debug(f"Gas estimate: {gas_estimate}, Gas price: {gas_price}, Deployment cost: {deployment_cost}")
+        return gas_estimate, gas_price, deployment_cost
+    except Exception as e:
+        logger.error(f"Error estimating gas and cost: {e}")
+        raise
+
+# Deploy the contract
+def deploy_contract(contract_interface, web3, account, private_key):
+    try:
+        contract = web3.eth.contract(abi=contract_interface['abi'], bytecode=contract_interface['bin'])
+        transaction = {
+            'chainId': 137,
+            'gas': 8000000,
+            'gasPrice': web3.eth.gas_price *7,
+            'nonce': web3.eth.get_transaction_count(account),
+            'data': contract.bytecode,
+        }
+        signed_txn = web3.eth.account.sign_transaction(transaction, private_key=private_key)
+        tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+        logger.debug(f"Transaction hash: {tx_hash.hex()}, Transaction receipt: {tx_receipt}")
+        return tx_receipt['contractAddress']
+    except Exception as e:
+        logger.error(f"Error deploying contract: {e}")
+        raise
+
+@csrf_exempt
+def deploy_view(request):
+    if request.method == 'GET':
+        return render(request, 'deploy.html')
+    elif request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            deploy_token = data.get('deployToken')
+            if not deploy_token:
+                return JsonResponse({'status': 'error', 'message': 'Deployment token is required'})
+
+            # Set up Web3 instance
+            web3 = Web3(Web3.HTTPProvider(POLYGON_RPC_URL))
+            if not web3.is_connected():
+                return JsonResponse({'status': 'error', 'message': 'Failed to connect to Web3 provider'})
+
+            # Compile the contract
+            contract_interface = compile_contract()
+            if not contract_interface:
+                return JsonResponse({'status': 'error', 'message': 'Failed to compile contract'})
+
+            # Estimate gas and deployment cost
+            gas_estimate, gas_price, deployment_cost = estimate_gas_and_cost(contract_interface, web3, ACCOUNT_ADDRESS)
+
+            # Deploy the contract
+            contract_address = deploy_contract(contract_interface, web3, ACCOUNT_ADDRESS, PRIVATE_KEY)
+
+            return JsonResponse({
+                'status': 'success',
+                'contract_address': contract_address,
+                'gas_estimate': gas_estimate,
+                'gas_price': gas_price,
+                'deployment_cost': web3.from_wei(deployment_cost, 'ether')
+            })
+        except Exception as e:
+            logger.error(f"Error in deploy_view: {e}")
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'failed', 'message': 'Invalid request method'})
+
+@csrf_exempt
+def dispute_rollup(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            batch_hash = data.get('batch_hash')
+
+            contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+            tx = contract.functions.disputeRollup(batch_hash).buildTransaction({
+                'from': ACCOUNT_ADDRESS,
+                'nonce': web3.eth.get_transaction_count(ACCOUNT_ADDRESS),
+                'gas': 2000000,
+                'gasPrice': web3.toWei('50', 'gwei')
+            })
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+            return JsonResponse({'message': 'Rollup disputed successfully', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error disputing rollup: {e}")
+            return JsonResponse({'error': str(e)}, status=400)
+    return JsonResponse({'error': 'Invalid request'}, status=400)
+
+@csrf_exempt
+def finalize_rollup(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            batch_hash = data.get('batch_hash')
+
+            contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+            tx = contract.functions.finalizeRollup(batch_hash).buildTransaction({
+                'from': ACCOUNT_ADDRESS,
+                'nonce': web3.eth.get_transaction_count(ACCOUNT_ADDRESS),
+                'gas': 2000000,
+                'gasPrice': web3.toWei('50', 'gwei')
+            })
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+            return JsonResponse({'message': 'Rollup finalized successfully', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error finalizing rollup: {e}")
+            return JsonResponse({'error': str(e)}, status=400)
+    return JsonResponse({'error': 'Invalid request'}, status=400)
+
+def get_stake(request):
+    try:
+        # Implement the logic to get the current stake of the user
+        stake = '10'  # Placeholder value
+        return JsonResponse({'stake': stake})
+    except Exception as e:
+        logger.error(f"Error getting stake: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+@login_required
+def claim_rewards(request):
+    try:
+        rewards = MiningReward.objects.filter(user=request.user, claimed=False)
+        total_reward = sum(reward.amount for reward in rewards)
+        if total_reward > 0:
+            contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+            tx = contract.functions.claimMiningRewards('your-token-address').buildTransaction({
+                'from': request.user.eth_address,
+                'nonce': web3.eth.get_transaction_count(request.user.eth_address),
+                'gas': 2000000,
+                'gasPrice': web3.toWei('50', 'gwei')
+            })
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+            web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            rewards.update(claimed=True)
+        return redirect('dashboard')
+    except Exception as e:
+        logger.error(f"Error claiming rewards: {str(e)}")
+        return JsonResponse({'status': 'failed', 'message': str(e)})
+
+@csrf_exempt
+def open_state_channel(request):
+    if request.method == 'POST':
+        try:
+            user_address = request.POST.get('user_address')
+            amount = float(request.POST.get('amount'))
+            tx_hash = open_channel(user_address, amount)
+            return JsonResponse({'status': 'success', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error opening state channel: {e}")
+            return JsonResponse({'status': 'failed', 'message': str(e)})
+    return JsonResponse({'status': 'failed', 'message': 'Invalid request method'})
+
+@csrf_exempt
+def update_state_channel(request):
+    if request.method == 'POST':
+        try:
+            commitment_hash = request.POST.get('commitment_hash')
+            signature = request.POST.get('signature')
+            tx_hash = update_state(commitment_hash, signature)
+            return JsonResponse({'status': 'success', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error updating state channel: {e}")
+            return JsonResponse({'status': 'failed', 'message': str(e)})
+    return JsonResponse({'status': 'failed', 'message': 'Invalid request method'})
+
+@csrf_exempt
+def close_state_channel(request):
+    if request.method == 'POST':
+        try:
+            user_address = request.POST.get('user_address')
+            amount = float(request.POST.get('amount'))
+            signature = request.POST.get('signature')
+            tx_hash = close_channel(user_address, amount, signature)
+            return JsonResponse({'status': 'success', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error closing state channel: {e}")
+            return JsonResponse({'status': 'failed', 'message': str(e)})
+    return JsonResponse({'status': 'failed', 'message': 'Invalid request method'})
+from web3.middleware import geth_poa_middleware
+web3.middleware_onion.inject(geth_poa_middleware, layer=0)
+
+def send_transaction_with_retry(tx, private_key, retries=5, gas_price_increment=1.2):
+    for i in range(retries):
+        try:
+            # Sign the transaction
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=private_key)
+            # Send the transaction
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            return tx_hash
+        except Exception as e:
+            if 'replacement transaction underpriced' in str(e):
+                tx['gasPrice'] = int(tx['gasPrice'] * gas_price_increment)
+                logger.warning(f"Transaction underpriced. Increasing gas price and retrying... {e}")
+            else:
+                raise e
+    raise Exception("Max retries reached. Could not send the transaction.")
+from .models import Wallet, Transaction, Shard, PendingTransaction
+import logging
+from decimal import Decimal
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import Wallet, PendingTransaction, Shard
+
+logger = logging.getLogger(__name__)
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logger.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logger.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logger.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logger.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            # Store the pending transaction
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+
+            # Check if the number of pending transactions has reached 100
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            # Sync with peers after creating a transaction
+            destination = request.POST.get('destination', '')
+            sync_with_peers(destination)
+
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash})
+
+        except Wallet.DoesNotExist:
+            logger.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logger.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logger.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+def process_pending_transactions():
+    pending_transactions = PendingTransaction.objects.all()
+    if not pending_transactions:
+        logger.info('No pending transactions to process.')
+        return
+
+    batch_hashes = []
+    batch_proofs = []
+
+    for pt in pending_transactions:
+        batch_hashes.append(bytes.fromhex(pt.hash))
+        batch_proofs.append(pt.signature.encode('utf-8'))
+
+    # Interact with the rollup smart contract
+    contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+    data = contract.encodeABI(fn_name='submitBatch', args=[batch_hashes, batch_proofs])
+
+    tx = {
+        'to': CONTRACT_ADDRESS,
+        'value': 0,
+        'gas': 2000000,
+        'gasPrice': web3.to_wei('50', 'gwei'),
+        'nonce': web3.eth.get_transaction_count(settings.MASTER_WALLET_ADDRESS),
+        'data': data,
+        'chainId': 137  # Polygon mainnet chain ID
+    }
+
+    gas_estimate = web3.eth.estimate_gas({
+        'to': CONTRACT_ADDRESS,
+        'from': settings.MASTER_WALLET_ADDRESS,
+        'data': data
+    })
+    tx['gas'] = gas_estimate
+
+    signed_tx = web3.eth.account.sign_transaction(tx, private_key=settings.MASTER_WALLET_PRIVATE_KEY)
+    tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+    tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+    logger.info(f"Batch transaction receipt: {tx_receipt}")
+
+    # Mark all pending transactions as processed
+    for pt in pending_transactions:
+        transaction = Transaction(
+            sender=pt.sender,
+            receiver=pt.receiver,
+            amount=pt.amount,
+            fee=pt.fee,
+            timestamp=pt.timestamp,
+            shard=Shard.objects.first(),
+            hash=pt.hash,
+            signature=pt.signature,
+            is_approved=False
+        )
+        transaction.save()
+        pt.delete()
+
+    logger.info('Processed pending transactions and submitted batch.')
+
+def rollup_operations_view(request):
+    return render(request, 'rollup_operations.html')
+def submit_rollup(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            batch_hash = data.get('batch_hash')
+            proof = data.get('proof')
+
+            # Convert batch_hash to bytes32 and proof to bytes
+            batch_hash_bytes = Web3.toBytes(hexstr=batch_hash)
+            proof_bytes = bytes.fromhex(proof)
+
+            # Logging to confirm types and lengths
+            logger.debug(f"batch_hash: {batch_hash} -> batch_hash_bytes: {batch_hash_bytes}")
+            logger.debug(f"proof: {proof} -> proof_bytes: {proof_bytes}")
+            logger.debug(f"batch_hash_bytes type: {type(batch_hash_bytes)}, length: {len(batch_hash_bytes)}")
+            logger.debug(f"proof_bytes type: {type(proof_bytes)}, length: {len(proof_bytes)}")
+
+            contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+            tx = contract.functions.submitRollup(batch_hash_bytes, proof_bytes).buildTransaction({
+                'from': ACCOUNT_ADDRESS,
+                'nonce': web3.eth.get_transaction_count(ACCOUNT_ADDRESS),
+                'gas': 2000000,
+                'gasPrice': web3.toWei('50', 'gwei')
+            })
+            signed_tx = web3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+            tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+            return JsonResponse({'message': 'Rollup submitted successfully', 'tx_hash': tx_hash.hex()})
+        except Exception as e:
+            logger.error(f"Error submitting rollup: {e}")
+            return JsonResponse({'error': str(e)}, status=400)
+    return JsonResponse({'error': 'Invalid request'}, status=400)
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
+
+def mine_single_block(user, shard_id):
+    global mining_statistics
+
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+    
+    
+import threading
+
+
+
+mining_active = threading.Event()
+mining_statistics = {
+    "hashrate": 0,
+    "blocks_mined": 0,
+    "total_rewards": 0
+}
+
+@csrf_exempt
+@login_required
+def start_mining(request, shard_id):
+    logger.info("Received request to start mining")
+    adapt_to_latency()  # Ensure protocol parameters are adapted before starting mining
+    mining_active.set()  # Set the mining active flag
+    logger.debug(f"Mining active set: {mining_active.is_set()}")
+    threading.Thread(target=mine_blocks_continuously, args=(request.user, shard_id)).start()
+    logger.info("Mining thread started")
+    return JsonResponse({'message': 'Mining started'})
+
+@csrf_exempt
+@login_required
+def stop_mining(request):
+    mining_active.clear()  # Clear the mining active flag
+    logger.info("Mining stopped")
+    return JsonResponse({'message': 'Mining stopped'})
+
+def mine_blocks_continuously(user, shard_id):
+    global mining_statistics
+    logger.info("Mining blocks continuously started")
+    miners = get_miners()  # Fetch miners
+    logger.debug(f"Miners fetched: {miners}")
+    tasks = generate_tasks()
+    logger.debug(f"Tasks generated: {tasks}")
+    efficient_task_allocation(miners, tasks)
+    while mining_active.is_set():
+        logger.debug("Mining loop active")
+        adapt_to_latency()  # Adapt protocol parameters based on latency
+        start_time = time.time()
+        mine_single_block(user, shard_id)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        if elapsed_time > 0:
+            hashrate = 1 / elapsed_time
+            mining_statistics["hashrate"] = hashrate
+            logger.info(f"Hashrate updated: {hashrate}")
+        time.sleep(0.1)  # Avoid too tight loop; adjust as needed
+        broadcast_pools()  # Broadcast updated pools after mining each block
+    logger.info("Mining blocks continuously stopped")
+
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+from .models import Block
+
+@csrf_exempt
+@login_required
+def start_mining(request, shard_id):
+    logger.info("Received request to start mining")
+
+    if request.user.is_authenticated:
+        adapt_to_latency()  # Ensure protocol parameters are adapted before starting mining
+        mining_active.set()  # Set the mining active flag
+        threading.Thread(target=mine_blocks_continuously, args=(request.user, shard_id)).start()
+        logger.info("Mining thread started for user %s in shard %s", request.user.username, shard_id)
+        return JsonResponse({'message': 'Mining started'})
+    else:
+        logger.error("User not authenticated. Cannot start mining.")
+        return JsonResponse({'error': 'User not authenticated'}, status=401)
+
+def mine_blocks_continuously(user, shard_id):
+    global mining_statistics
+    logger.info("Mining blocks continuously started")
+    miners = get_miners()  # Fetch miners
+    tasks = generate_tasks()
+    efficient_task_allocation(miners, tasks)
+    while mining_active.is_set():
+        logger.debug("Mining loop active")
+        adapt_to_latency()  # Adapt protocol parameters based on latency
+        start_time = time.time()
+        mine_single_block(user, shard_id)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        if elapsed_time > 0:
+            hashrate = 1 / elapsed_time
+            mining_statistics["hashrate"] = hashrate
+            logger.info(f"Hashrate updated: {hashrate}")
+        time.sleep(0.0001)
+        broadcast_pools()  # Broadcast updated pools after mining each block
+    logger.info("Mining blocks continuously stopped")
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+def dashboard(request):
+    # Ensure there is always one contract object to work with
+    contract, created = Contract.objects.get_or_create(
+        pk=1, 
+        defaults={
+            'address': '',  
+            'abi': '[]'
+        }
+    )
+
+    # Handle contract form submission
+    if request.method == 'POST' and 'contract_form' in request.POST:
+        form = ContractForm(request.POST, instance=contract)
+        if form.is_valid():
+            form.save()
+            return redirect('deploy_contract')
+    else:
+        form = ContractForm(instance=contract)
+
+    # Handle transaction creation
+    if request.method == 'POST' and 'create_transaction' in request.POST:
+        return handle_create_transaction(request)
+
+    # Fetch all wallets excluding the system user
+    wallets = Wallet.objects.exclude(user__username='system')
+
+    # Get the current user's wallet address if available
+    wallet_address = get_user_wallet_address(request.user)
+
+    # Prepare context for rendering the dashboard
+    context = {
+        'form': form,
+        'wallets': wallets,
+        'wallet_address': wallet_address,
+        'master_node_url': settings.MASTER_NODE_URL,
+        'current_node_url': settings.CURRENT_NODE_URL
+    }
+
+    return render(request, 'dashboard.html', context)
+
+def handle_create_transaction(request):
+    try:
+        sender_address = request.POST.get('sender')
+        receiver_address = request.POST.get('receiver')
+        amount = Decimal(request.POST.get('amount'))
+
+        if not sender_address or not receiver_address or not amount:
+            return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+        sender = Wallet.objects.get(address=sender_address)
+        receiver = Wallet.objects.get(address=receiver_address)
+        shard = Shard.objects.first()
+
+        # Calculate the fee based on the network congestion factor
+        congestion_factor = get_network_congestion_factor()
+        fee = (amount * congestion_factor) / Decimal('100000000')
+
+        if sender.balance < (amount + fee):
+            return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+        transaction = Transaction(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            fee=fee,
+            timestamp=timezone.now(),
+            shard=shard,
+            is_approved=False
+        )
+        transaction.hash = transaction.create_hash()
+        transaction.signature = "simulated_signature"
+        transaction.save()
+
+        # Validate and approve the transaction
+        if validate_transaction(transaction):
+            approve_transaction(transaction)
+            message = 'Transaction created and approved'
+        else:
+            message = 'Transaction created but not approved due to validation failure'
+
+        return JsonResponse({'message': message, 'transaction_hash': transaction.hash})
+
+    except Wallet.DoesNotExist:
+        return JsonResponse({'error': 'Wallet not found'}, status=404)
+    except Exception as e:
+        logger.error("Error creating transaction: %s", str(e))
+        return JsonResponse({'error': str(e)}, status=500)
+
+def get_user_wallet_address(user):
+    try:
+        wallet = Wallet.objects.get(user=user)
+        return wallet.address
+    except Wallet.DoesNotExist:
+        logger.error("Wallet not found for user: %s", user.username)
+    except Exception as e:
+        logger.error("Error fetching wallet for user %s: %s", user.username, str(e))
+    return None
+def mine_single_block(user, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash, user.private_key, user.address)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+def mine_blocks_continuously(user, shard_id):
+    global mining_statistics
+    logger.info("Mining blocks continuously started")
+    miners = get_miners()  # Fetch miners
+    tasks = generate_tasks()
+    efficient_task_allocation(miners, tasks)
+    while mining_active.is_set():
+        logger.debug("Mining loop active")
+        adapt_to_latency()  # Adapt protocol parameters based on latency
+        start_time = time.time()
+        mine_single_block(user, shard_id)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        if elapsed_time > 0:
+            hashrate = 1 / elapsed_time
+            mining_statistics["hashrate"] = hashrate
+            logger.info(f"Hashrate updated: {hashrate}")
+        time.sleep(0.0001)
+        broadcast_pools()  # Broadcast updated pools after mining each block
+    logger.info("Mining blocks continuously stopped")
+def start_mining(request, shard_id):
+    logger.info("Received request to start mining")
+
+    if request.user.is_authenticated:
+        adapt_to_latency()  # Ensure protocol parameters are adapted before starting mining
+        mining_active.set()  # Set the mining active flag
+
+        user_wallet = Wallet.objects.filter(user=request.user).first()
+        if not user_wallet:
+            logger.error("Wallet not found for user: %s", request.user.username)
+            return JsonResponse({'error': 'User wallet not found'}, status=404)
+
+        user_private_key = user_wallet.private_key
+        user_address = user_wallet.address
+
+        threading.Thread(target=mine_blocks_continuously, args=(request.user, user_private_key, user_address, shard_id)).start()
+        logger.info("Mining thread started for user %s in shard %s", request.user.username, shard_id)
+        return JsonResponse({'message': 'Mining started'})
+    else:
+        logger.error("User not authenticated. Cannot start mining.")
+        return JsonResponse({'error': 'User not authenticated'}, status=401)
+def mine_blocks_continuously(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info("Mining blocks continuously started")
+    miners = get_miners()  # Fetch miners
+    tasks = generate_tasks()
+    efficient_task_allocation(miners, tasks)
+    while mining_active.is_set():
+        logger.debug("Mining loop active")
+        adapt_to_latency()  # Adapt protocol parameters based on latency
+        start_time = time.time()
+        mine_single_block(user, user_private_key, user_address, shard_id)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        if elapsed_time > 0:
+            hashrate = 1 / elapsed_time
+            mining_statistics["hashrate"] = hashrate
+            logger.info(f"Hashrate updated: {hashrate}")
+        time.sleep(0.0001)
+        broadcast_pools()  # Broadcast updated pools after mining each block
+    logger.info("Mining blocks continuously stopped")
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create an anchor hash and submit to Polygon
+    anchor_hash = create_anchor_hash(approved_transactions)
+    tx_hash = submit_anchor_to_polygon(anchor_hash, user_private_key, user_address)
+    logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+from web3 import Web3
+
+def submit_anchor_to_polygon(anchor_hash, private_key, address):
+    try:
+        web3 = Web3(Web3.HTTPProvider(POLYGON_RPC_URL))
+        if not web3.is_connected():
+            raise Exception("Failed to connect to Polygon RPC URL")
+
+        # Get the transaction count
+        nonce = web3.eth.get_transaction_count(address)
+
+        # Ensure anchor_hash is bytes
+        if isinstance(anchor_hash, str):
+            anchor_hash = bytes.fromhex(anchor_hash)
+
+        # Create the transaction dictionary
+        transaction = {
+            'to': settings.ANCHOR_CONTRACT_ADDRESS,
+            'value': 0,
+            'gas': 2000000,
+            'gasPrice': web3.to_wei('50', 'gwei'),
+            'nonce': nonce,
+            'data': web3.to_hex(anchor_hash),
+        }
+
+        # Sign the transaction
+        signed_txn = web3.eth.account.sign_transaction(transaction, private_key)
+
+        # Send the transaction
+        tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+
+        # Wait for the transaction receipt
+        tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+
+        return tx_receipt.transactionHash
+
+    except Exception as e:
+        logger.error(f"Error submitting anchor to Polygon: {str(e)}")
+        raise
+def submit_anchor_to_polygon(anchor_hashes, private_key, address):
+    try:
+        web3 = Web3(Web3.HTTPProvider(POLYGON_RPC_URL))
+        if not web3.is_connected():
+            raise Exception("Failed to connect to Polygon RPC URL")
+
+        # Get the transaction count using the correct method name
+        nonce = web3.eth.get_transaction_count(address)
+
+        for anchor_hash in anchor_hashes:
+            # Ensure anchor_hash is bytes
+            if isinstance(anchor_hash, str):
+                anchor_hash = bytes.fromhex(anchor_hash)
+
+            # Create the transaction dictionary with chainId for EIP-155
+            transaction = {
+                'to': ANCHOR_CONTRACT_ADDRESS,
+                'value': 0,
+                'gas': 2000000,
+                'gasPrice': web3.to_wei('50', 'gwei'),
+                'nonce': nonce,
+                'data': web3.to_hex(anchor_hash),
+                'chainId': 137  # Polygon mainnet chain ID
+            }
+
+            # Sign the transaction
+            signed_txn = web3.eth.account.sign_transaction(transaction, private_key)
+
+            # Send the transaction
+            tx_hash = web3.eth.sendRawTransaction(signed_txn.rawTransaction)
+
+            # Wait for the transaction receipt
+            tx_receipt = web3.eth.waitForTransactionReceipt(tx_hash)
+
+            logger.info(f"Transaction successful with hash: {tx_receipt.transactionHash.hex()}")
+
+            nonce += 1  # Increment nonce for the next transaction
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error submitting anchor to Polygon: {str(e)}")
+        raise
+
+def create_anchor_hash(transactions):
+    transaction_hashes = ''.join([tx.hash for tx in transactions])
+    anchor_hash = hashlib.sha256(transaction_hashes.encode('utf-8')).digest()
+    return anchor_hash
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create anchor hashes and submit to Polygon
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+def submit_anchor_to_polygon(anchor_hashes, private_key, address):
+    try:
+        web3 = Web3(Web3.HTTPProvider(POLYGON_RPC_URL))
+        if not web3.is_connected():
+            raise Exception("Failed to connect to Polygon RPC URL")
+
+        # Get the transaction count using the correct method name
+        nonce = web3.eth.get_transaction_count(address)
+        tx_hashes = []
+
+        # Create the transaction dictionary with chainId for EIP-155
+        for i in range(0, len(anchor_hashes), 100):  # Batch size of 100
+            batch = anchor_hashes[i:i+100]
+            batch_data = b''.join([bytes.fromhex(h) if isinstance(h, str) else h for h in batch])
+            data = web3.encodeABI(fn_name='submitBatch', args=[batch_data])
+
+            transaction = {
+                'to': settings.ANCHOR_CONTRACT_ADDRESS,
+                'value': 0,
+                'gas': 2000000,
+                'gasPrice': web3.to_wei('50', 'gwei'),
+                'nonce': nonce,
+                'data': data,
+                'chainId': 137  # Polygon mainnet chain ID
+            }
+
+            # Sign the transaction
+            signed_txn = web3.eth.account.sign_transaction(transaction, private_key)
+            tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+
+            # Wait for the transaction receipt
+            tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            tx_hashes.append(tx_receipt.transactionHash)
+
+            nonce += 1  # Increment nonce for each transaction
+
+        return tx_hashes
+
+    except Exception as e:
+        logger.error(f"Error submitting anchor to Polygon: {str(e)}")
+        raise
+
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create anchor hashes and submit to Polygon in batches
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+
+import logging
+import multiaddr
+import trio
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+                await host.connect(info)
+                stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Failed to connect to peer: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        try:
+            logging.info(f"POST request received with port: {port} and destination: {destination}")
+            trio.run(run_sync, port, destination)
+            context = p2p_instance.context  # Update context after the run_sync function
+            logging.info(f"Final context after run_sync: {context}")
+            return render(request, 'sync.html', context)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+import logging
+import multiaddr
+import trio
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        await host.connect(info)
+                        stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {info.addrs[0]}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise e
+
+            except Exception as e:
+                logging.error(f"Failed to connect to peer after {retries} attempts: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        try:
+            logging.info(f"POST request received with port: {port} and destination: {destination}")
+            trio.run(run_sync, port, destination)
+            context = p2p_instance.context  # Update context after the run_sync function
+            logging.info(f"Final context after run_sync: {context}")
+            return render(request, 'sync.html', context)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+import logging
+import multiaddr
+import trio
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        await host.connect(info)
+                        stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {info.addrs[0]}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise e
+
+            except Exception as e:
+                logging.error(f"Failed to connect to peer after {retries} attempts: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        try:
+            logging.info(f"POST request received with port: {port} and destination: {destination}")
+            trio.run(run_sync, port, destination)
+            context = p2p_instance.context  # Update context after the run_sync function
+            logging.info(f"Final context after run_sync: {context}")
+            return render(request, 'sync.html', context)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+import logging
+import multiaddr
+import trio
+import sys
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        await host.connect(info)
+                        stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {info.addrs[0]}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise e
+
+            except Exception as e:
+                logging.error(f"Failed to connect to peer after {retries} attempts: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        def run_in_thread():
+            try:
+                logging.info(f"POST request received with port: {port} and destination: {destination}")
+                trio.run(run_sync, port, destination)
+                context = p2p_instance.context  # Update context after the run_sync function
+                logging.info(f"Final context after run_sync: {context}")
+            except Exception as e:
+                logging.error(f"Error during sync: {str(e)}")
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def sync_with_peers(destination):
+    def run_in_thread():
+        try:
+            logging.info(f"Starting sync with destination: {destination}")
+            trio.run(run_sync, destination)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(run_in_thread)
+    TOTAL_SUPPLY_CAP = Decimal('100000000')  # Example total supply cap
+
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create anchor hashes and submit to Polygon in batches
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+
+    # Sync with peers after mining a block
+    destination = "your_peer_destination_address"  # This should be dynamically set or fetched from config
+    sync_with_peers(destination)
+    logger.info("Synchronized with peers after mining a block.")
+import logging
+import multiaddr
+import trio
+import sys
+from decimal import Decimal
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host, self.dht = create_dht_host(new_host())
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    dht = p2p_instance.dht
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        await host.connect(info)
+                        stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {info.addrs[0]}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise e
+
+            except Exception as e:
+                logging.error(f"Failed to connect to peer after {retries} attempts: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        def run_in_thread():
+            try:
+                logging.info(f"POST request received with port: {port} and destination: {destination}")
+                trio.run(run_sync, port, destination)
+                context = p2p_instance.context  # Update context after the run_sync function
+                logging.info(f"Final context after run_sync: {context}")
+            except Exception as e:
+                logging.error(f"Error during sync: {str(e)}")
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def sync_with_peers(destination):
+    def run_in_thread():
+        try:
+            logging.info(f"Starting sync with destination: {destination}")
+            trio.run(run_sync, destination)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(run_in_thread)
+
+async def discover_peers(dht, num_peers=1):
+    """Discover peers using DHT."""
+    try:
+        discovered_peers = await dht.find_peers(num_peers)
+        return discovered_peers
+    except Exception as e:
+        logger.error(f"Peer discovery failed: {str(e)}")
+        return []
+
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Discover peers and broadcast block
+    async def broadcast_block_to_peers():
+        p2p_instance = P2PSingleton.get_instance()
+        discovered_peers = await discover_peers(p2p_instance.dht)
+        for peer in discovered_peers:
+            try:
+                stream = await p2p_instance.host.new_stream(peer.peer_id, [PROTOCOL_ID])
+                await stream.write(new_block_hash.encode())
+                logger.info(f"Broadcasted block to peer {peer.peer_id}")
+            except Exception as e:
+                logger.error(f"Failed to broadcast block to peer {peer.peer_id}: {str(e)}")
+
+    trio.run(broadcast_block_to_peers)
+
+    # Create anchor hashes and submit to Polygon in batches
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+
+import logging
+import multiaddr
+import trio
+import sys
+from decimal import Decimal
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, destination: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+
+        if not destination:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+        else:
+            try:
+                destination = destination.strip()
+                logging.info(f"Destination multiaddress: {destination}")
+                maddr = multiaddr.Multiaddr(destination)
+                info = await info_from_p2p_addr(maddr)
+                logging.info(f"Connecting to peer {info.peer_id} at {info.addrs}")
+
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        await host.connect(info)
+                        stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {info.addrs[0]}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise e
+
+            except Exception as e:
+                logging.error(f"Failed to connect to peer after {retries} attempts: {e}")
+                raise e
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        destination = request.POST.get('destination', '')
+
+        def run_in_thread():
+            try:
+                logging.info(f"POST request received with port: {port} and destination: {destination}")
+                trio.run(run_sync, port, destination)
+                context = p2p_instance.context  # Update context after the run_sync function
+                logging.info(f"Final context after run_sync: {context}")
+            except Exception as e:
+                logging.error(f"Error during sync: {str(e)}")
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def sync_with_peers(destination):
+    def run_in_thread():
+        try:
+            logging.info(f"Starting sync with destination: {destination}")
+            trio.run(run_sync, destination)
+        except Exception as e:
+            logging.error(f"Error during sync: {str(e)}")
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(run_in_thread)
+
+async def broadcast_block_to_peers(block_hash: str):
+    p2p_instance = P2PSingleton.get_instance()
+    discovered_peers = await discover_peers(p2p_instance.host)
+    for peer in discovered_peers:
+        try:
+            stream = await p2p_instance.host.new_stream(peer.peer_id, [PROTOCOL_ID])
+            await stream.write(block_hash.encode())
+            logging.info(f"Broadcasted block to peer {peer.peer_id}")
+        except Exception as e:
+            logging.error(f"Failed to broadcast block to peer {peer.peer_id}: {str(e)}")
+
+async def discover_peers(host) -> list:
+    # Dummy implementation of peer discovery
+    # Replace this with actual peer discovery logic
+    return []
+
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create anchor hashes and submit to Polygon in batches
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+import asyncio
+import websockets
+import json
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+def run_in_thread(port, master_url):
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(run_sync(port, master_url))
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+    finally:
+        loop.close()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+import sys
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+def mine_single_block(user, user_private_key, user_address, shard_id):
+    global mining_statistics
+    logger.info(f"Starting mining process for user {user} in shard {shard_id}")
+    
+    try:
+        shard = Shard.objects.get(id=shard_id)
+        logger.info(f"Shard {shard.name} found.")
+    except Shard.DoesNotExist:
+        logger.error("Shard not found")
+        return
+    
+    transactions = Transaction.objects.filter(is_approved=False, shard=shard)
+    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    logger.info("Generating proof of work...")
+    proof = proof_of_work(previous_block_hash)
+    logger.info(f"Proof of work generated: {proof}")
+
+    try:
+        miner_wallet = Wallet.objects.get(user=user)
+        logger.info(f"Miner wallet found for user {user}.")
+    except Wallet.DoesNotExist:
+        logger.error("Miner wallet not found")
+        return
+
+    system_wallet = ensure_system_wallet()
+    total_fees = Decimal(0)
+    approved_transactions = []
+
+    logger.info("Validating and approving transactions...")
+    for transaction in transactions:
+        if validate_transaction(transaction):
+            transaction.is_approved = True
+            transaction.save()
+            total_fees += Decimal(transaction.fee)
+            approved_transactions.append(transaction)
+    
+    logger.info(f"Total fees from transactions: {total_fees}")
+
+    current_time = timezone.now()
+    block_reward, _ = adjust_difficulty_and_reward()
+    total_reward = block_reward + total_fees
+    logger.info(f"Block reward: {block_reward}, Total reward: {total_reward}")
+
+    current_supply = Wallet.objects.exclude(user=system_wallet.user).aggregate(Sum('balance'))['balance__sum'] or Decimal(0)
+    if current_supply + total_reward > TOTAL_SUPPLY_CAP:
+        total_reward = TOTAL_SUPPLY_CAP - current_supply
+        block_reward = total_reward - total_fees
+    logger.info(f"Adjusted total reward: {total_reward}, Block reward: {block_reward}")
+
+    if total_reward <= 0:
+        logger.info('No reward due to supply cap. Skipping block mining.')
+        return
+
+    logger.info("Updating miner wallet balance...")
+    miner_wallet.balance += total_reward
+    miner_wallet.save()
+    logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
+
+    new_block_hash = generate_unique_hash()
+    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block.save()  # Save the new block to the database
+    logger.info(f"New block created with hash: {new_block_hash}")
+
+    # Update the DAG
+    if previous_block_hash in dag:
+        dag[previous_block_hash].children.append(new_block)
+    dag[new_block_hash] = new_block
+    logger.info("DAG updated with new block.")
+
+    reward_transaction = Transaction(
+        hash=generate_unique_hash(),
+        sender=system_wallet,
+        receiver=miner_wallet,
+        amount=block_reward,
+        fee=Decimal(0),
+        signature="reward_signature",
+        timestamp=current_time,
+        is_approved=True,
+        shard=shard
+    )
+    reward_transaction.save()
+    logger.info("Reward transaction created and saved.")
+
+    # Broadcast the approved transactions
+    broadcast_transactions(approved_transactions)
+    logger.info("Approved transactions broadcasted.")
+
+    # Broadcast the reward transaction
+    broadcast_transaction({
+        'transaction_hash': reward_transaction.hash,
+        'sender': reward_transaction.sender.address,
+        'receiver': reward_transaction.receiver.address,
+        'amount': str(reward_transaction.amount),
+        'fee': str(reward_transaction.fee),
+        'timestamp': reward_transaction.timestamp.isoformat(),
+        'is_approved': reward_transaction.is_approved
+    })
+    logger.info("Reward transaction broadcasted.")
+
+    # Create anchor hashes and submit to Polygon in batches
+    anchor_hashes = [create_anchor_hash(approved_transactions[i:i+10]) for i in range(0, len(approved_transactions), 10)]
+    tx_hashes = submit_anchor_to_polygon(anchor_hashes, user_private_key, user_address)
+    for tx_hash in tx_hashes:
+        logger.info(f"Submitted anchor hash to Polygon: {tx_hash.hex()}")
+
+    mining_statistics["blocks_mined"] += 1
+    mining_statistics["total_rewards"] += float(total_reward)
+    logger.info(f"Mining statistics updated: {mining_statistics}")
+
+    ordered_blocks = order_blocks(dag)
+    well_connected_subset = select_well_connected_subset(dag)
+
+    record_miner_contribution(miner_wallet, reward_transaction)
+    distribute_rewards(get_miners(), total_reward)
+    logger.info("Miner contributions recorded and rewards distributed.")
+
+    # Sync with peers after mining a block
+    logger.info("Starting sync with peers...")
+    sync_with_peers()
+
+def sync_with_peers():
+    try:
+        # Example values for port and master_url; these should be configured appropriately
+        port = 8000
+        master_url = 'ws://localhost:8765'
+        run_in_thread(port, master_url)
+    except Exception as e:
+        logger.error(f"Error during sync: {str(e)}")
+# quantumapp/views.py
+import asyncio
+import websockets
+import json
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+def sync_with_peers():
+    try:
+        peer_info = discover_peers_from_master()
+        logging.info(f"Discovered peers: {peer_info}")
+
+        for peer in peer_info:
+            try:
+                logging.info(f"Attempting to connect to peer: {peer['id']}, address: {peer['address']}")
+                # Assume connect_to_peer is a function that attempts to connect to a peer
+                connect_to_peer(peer['address'])
+                logging.info(f"Successfully connected to peer: {peer['id']}")
+            except Exception as e:
+                logging.error(f"Failed to connect to peer: {peer['id']} with error: {e}")
+
+        logging.info("Sync process completed successfully.")
+    except Exception as e:
+        logging.error(f"Error during sync: {e}")
+import logging
+import subprocess
+import json
+
+def sync_with_master(port, master_url):
+    try:
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", "https://app.cashewstable.com/sync/", 
+             "-d", f"port={port}&master_url={master_url}"],
+            stderr=subprocess.STDOUT
+        )
+        logging.info(f"Sync response: {response.decode('utf-8')}")
+        return json.loads(response.decode('utf-8'))
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+def sync_with_peers(port, master_url):
+    sync_details = sync_with_master(port, master_url)
+    peer_id = sync_details.get("peer_id", "None")
+    multiaddress = sync_details.get("multiaddress", "None")
+    hint = sync_details.get("hint", "None")
+
+    logging.info(f"Peer ID: {peer_id}")
+    logging.info(f"Multiaddress: {multiaddress}")
+    logging.info(f"Hint: {hint}")
+
+    # Further peer-to-peer sync process here...
+
+    return sync_details
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    port = 8000
+    master_url = "ws://localhost:8765"
+    sync_details = sync_with_peers(port, master_url)
+
+    # Save sync details to a file for the HTML template to read
+    with open("sync_details.json", "w") as f:
+        json.dump(sync_details, f)
+# quantumapp/views.py
+
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.peer_id = "Loading..."
+        self.multiaddress = "Loading..."
+        self.hint = "Loading..."
+        self.context = {'multiaddress': "Loading...", 'hint': "Loading...", 'peer_id': "Loading..."}
+
+def run_in_thread(port, master_url):
+    try:
+        # Assuming `trio.run(run_sync, port, master_url)` or similar function to start the sync
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    return JsonResponse(context)
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    logging.info(f"Fetching sync details: {context}")
+    return JsonResponse(context)
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = host.get_id().pretty()
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = host.get_id().pretty()
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    logging.info(f"Fetching sync details: {context}")
+    return JsonResponse(context)
+# Adjust run_sync function
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = host.get_id().pretty()
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    # Update context before starting host
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+# Updated Django view in quantumapp/views.py
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+# Assuming P2PSingleton and necessary functions are defined as before
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        def run_in_thread():
+            try:
+                logging.info(f"POST request received with port: {port} and master_url: {master_url}")
+                trio.run(run_sync, port, master_url)
+            except Exception as e:
+                logging.error(f"Error during sync: {str(e)}")
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    logging.info(f"Fetching sync details: {context}")
+    return JsonResponse(context)
+from libp2p import new_host
+from libp2p.network.network_interface import INetwork
+import multiaddr
+import logging
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        
+        self.host = new_host()  # Ensure host is initialized here
+        self.peer_id = self.host.get_id().pretty()  # Get peer ID from the host
+        self.multiaddress = f"/ip4/127.0.0.1/tcp/8000/p2p/{self.peer_id}"
+        self.context = {
+            'peer_id': self.peer_id,
+            'multiaddress': self.multiaddress,
+            'hint': f"Run this from the same folder in another console:\n\npython chat.py -p 8001 -d {self.multiaddress}\n"
+        }
+import trio
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from concurrent.futures import ThreadPoolExecutor
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = host.get_id().pretty()
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        def run_in_thread():
+            try:
+                logging.info(f"POST request received with port: {port} and master_url: {master_url}")
+                trio.run(run_sync, port, master_url)
+            except Exception as e:
+                logging.error(f"Error during sync: {str(e)}")
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    logging.info(f"Fetching sync details: {context}")
+    return JsonResponse(context)
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None  # Initialize host as None
+        self.peer_id = None  # Initialize peer_id as None
+        self.multiaddress = None  # Initialize multiaddress as None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def set_host(self, host):
+        self.host = host
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = f"/ip4/127.0.0.1/tcp/{port}/p2p/{self.peer_id}"
+        self.context.update({
+            'peer_id': self.peer_id,
+            'multiaddress': self.multiaddress,
+            'hint': f"Run this from the same folder in another console:\n\npython chat.py -p {int(port) + 1} -d {self.multiaddress}\n"
+        })
+import sys
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import logging
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    if p2p_instance.host is None:
+        p2p_instance.set_host(new_host())
+    host = p2p_instance.host
+    peer_id = host.get_id().pretty()
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from concurrent.futures import ThreadPoolExecutor
+import logging
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+
+def get_sync_details(request):
+    p2p_instance = P2PSingleton.get_instance()
+    context = p2p_instance.context
+    logging.info(f"Fetching sync details: {context}")
+    return JsonResponse(context)
+import asyncio
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import PeerInfo, info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+import asyncio
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+from concurrent.futures import ThreadPoolExecutor
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+        async def stream_handler(stream: INetStream) -> None:
+            nursery.start_soon(read_data, stream)
+            nursery.start_soon(write_data, stream)
+
+        host.set_stream_handler(PROTOCOL_ID, stream_handler)
+        logging.info("Waiting for incoming connection...")
+
+        # Discover peers from the master node
+        discovered_peers = await discover_peers_from_master(master_url)
+        logging.info(f"Discovered peers: {discovered_peers}")
+
+        for peer_address in discovered_peers:
+            try:
+                peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                await host.connect(peer_info)
+                stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+                logging.info(f"Connected to peer {peer_info.addrs[0]}")
+            except Exception as e:
+                logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+        await trio.sleep_forever()
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+
+@csrf_exempt
+def sync_view(request):
+    p2p_instance = P2PSingleton.get_instance()
+    
+    if request.method == 'POST':
+        port = int(request.POST.get('port', 8000))
+        master_url = request.POST.get('master_url', 'ws://localhost:8765')
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_in_thread, port, master_url)
+
+        return JsonResponse({'status': 'ok', 'message': 'Sync started in the background'})
+
+    elif request.method == 'GET':
+        context = p2p_instance.context
+        logging.info(f"Rendering sync.html with context: {context}")
+        return render(request, 'sync.html', context)
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        raise
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+
+# Django views remain the same
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        if not host.get_is_running():
+            async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+                async def stream_handler(stream: INetStream) -> None:
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+
+                host.set_stream_handler(PROTOCOL_ID, stream_handler)
+                logging.info("Waiting for incoming connection...")
+
+                # Discover peers from the master node
+                discovered_peers = await discover_peers_from_master(master_url)
+                logging.info(f"Discovered peers: {discovered_peers}")
+
+                for peer_address in discovered_peers:
+                    try:
+                        peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                        await host.connect(peer_info)
+                        stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                        nursery.start_soon(read_data, stream)
+                        nursery.start_soon(write_data, stream)
+                        logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                    except Exception as e:
+                        logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+                await trio.sleep_forever()
+        else:
+            logging.info("Host is already running.")
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = new_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty()
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        if self.host is None:
+            self.host = new_host()
+            logging.info("Host created")
+
+    def close_host(self):
+        if self.host is not None:
+            self.host.close()
+            self.host = None
+            logging.info("Host closed")
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async with websockets.connect(master_url) as websocket:
+        await websocket.send(json.dumps({"action": "get_peers"}))
+        response = await websocket.recv()
+        data = json.loads(response)
+        peers = data["peers"]
+        return peers
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    try:
+        if not asyncio.get_event_loop().is_running():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+import websockets
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async def fetch_peers():
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+
+    try:
+        if not asyncio.get_event_loop().is_running():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return await loop.run_until_complete(fetch_peers())
+        else:
+            return await fetch_peers()
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await discover_peers_from_master(master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+import websockets
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async def fetch_peers():
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+
+    try:
+        return await fetch_peers()
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+def run_discover_peers(master_url: str) -> list:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(discover_peers_from_master(master_url))
+    finally:
+        loop.close()
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await trio.to_thread.run_sync(run_discover_peers, master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+import json
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+import json
+import traceback
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            master_url = request.POST.get('master_url')
+            peer_info_str = request.POST.get('peer_info')
+            if peer_info_str is None:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            data = asyncio.run(register_peer_async(master_url, peer_info))
+            return JsonResponse(data)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            master_url = request.POST.get('master_url')
+            data = asyncio.run(get_peers_async(master_url))
+            return JsonResponse(data)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            result = asyncio.run(get_peers_async(master_url))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            result = asyncio.run(get_peers_async(master_url))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            result = asyncio.run(get_peers_async(master_url))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+import asyncio
+import websockets
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            result = asyncio.run(get_peers_async(master_url))
+            return JsonResponse(result)
+        except Exception as e:
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import pandas as pd
+import numpy as np
+from binance.client import Client
+import ta
+from django.shortcuts import render
+
+# Your Binance API key and secret
+api_key = 'Kx5h2OD8OxvMYiFOYJvrw5TDM3uhl8dokCO1oGOKYhTrvEtmd9OHRRwkYcFL2bWy'
+api_secret = 'your_api_secret_here'
+
+client = Client(api_key, api_secret)
+
+def fetch_klines(symbol, interval, lookback):
+    klines = client.get_historical_klines(symbol, interval, lookback)
+    data = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+    data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+    data.set_index('timestamp', inplace=True)
+    data = data[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return data
+
+def apply_indicators(data):
+    data['EMA_9'] = ta.trend.ema_indicator(data['close'], window=9)
+    data['Bollinger_High'] = ta.volatility.bollinger_hband(data['close'], window=10)
+    data['Bollinger_Low'] = ta.volatility.bollinger_lband(data['close'], window=10)
+    data['RSI'] = ta.momentum.rsi(data['close'], window=9)
+    data['Stoch_RSI'] = ta.momentum.stochrsi_k(data['close'], window=9)
+    data['Signal_Long'] = (data['close'] < data['EMA_9']) & (data['Stoch_RSI'] < 0.2)
+    data['Signal_Short'] = (data['close'] > data['EMA_9']) & (data['Stoch_RSI'] > 0.8)
+    return data
+
+def scalping_view(request):
+    symbol = 'BTCUSDT'
+    interval = '5m'
+    lookback = '1 day ago UTC'
+    data = fetch_klines(symbol, interval, lookback)
+    data = apply_indicators(data)
+    
+    # Convert the data to JSON format for Chart.js
+    chart_data = {
+        'labels': data.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        'datasets': [
+            {
+                'label': 'Close Price',
+                'data': data['close'].tolist(),
+                'borderColor': 'rgba(75, 192, 192, 1)',
+                'fill': False,
+            },
+            {
+                'label': 'EMA 9',
+                'data': data['EMA_9'].tolist(),
+                'borderColor': 'rgba(153, 102, 255, 1)',
+                'fill': False,
+            }
+        ]
+    }
+    
+    return render(request, 'scalping.html', {'chart_data': chart_data})
+import pandas as pd
+import numpy as np
+from binance.client import Client
+import ta
+from django.shortcuts import render
+from django.http import JsonResponse
+import json
+
+# Your Binance API key and secret
+api_key = 'Kx5h2OD8OxvMYiFOYJvrw5TDM3uhl8dokCO1oGOKYhTrvEtmd9OHRRwkYcFL2bWy'
+api_secret = 'your_api_secret_here'
+
+client = Client(api_key, api_secret)
+
+def fetch_klines(symbol, interval, lookback):
+    klines = client.get_historical_klines(symbol, interval, lookback)
+    data = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+    data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+    data.set_index('timestamp', inplace=True)
+    data = data[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return data
+
+def apply_indicators(data):
+    data['EMA_9'] = ta.trend.ema_indicator(data['close'], window=9)
+    data['Bollinger_High'] = ta.volatility.bollinger_hband(data['close'], window=10)
+    data['Bollinger_Low'] = ta.volatility.bollinger_lband(data['close'], window=10)
+    data['RSI'] = ta.momentum.rsi(data['close'], window=9)
+    data['Stoch_RSI'] = ta.momentum.stochrsi_k(data['close'], window=9)
+    data['Signal_Long'] = (data['close'] < data['EMA_9']) & (data['Stoch_RSI'] < 0.2)
+    data['Signal_Short'] = (data['close'] > data['EMA_9']) & (data['Stoch_RSI'] > 0.8)
+    return data
+
+def scalping_view(request):
+    symbol = 'BTCUSDT'
+    interval = '5m'
+    lookback = '1 day ago UTC'
+    data = fetch_klines(symbol, interval, lookback)
+    data = apply_indicators(data)
+    
+    # Convert the data to JSON format for Chart.js
+    chart_data = {
+        'labels': data.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        'datasets': [
+            {
+                'label': 'Close Price',
+                'data': data['close'].tolist(),
+                'borderColor': 'rgba(75, 192, 192, 1)',
+                'fill': False,  # Changed False to false
+            },
+            {
+                'label': 'EMA 9',
+                'data': data['EMA_9'].tolist(),
+                'borderColor': 'rgba(153, 102, 255, 1)',
+                'fill': False,  # Changed False to false
+            }
+        ]
+    }
+    
+    context = {'chart_data': json.dumps(chart_data)}  # Use json.dumps to serialize the data properly
+    
+    return render(request, 'scalping.html', context)
+import pandas as pd
+import numpy as np
+from binance.client import Client
+import ta
+from django.shortcuts import render
+from django.http import JsonResponse
+import json
+
+# Your Binance API key and secret
+api_key = 'Kx5h2OD8OxvMYiFOYJvrw5TDM3uhl8dokCO1oGOKYhTrvEtmd9OHRRwkYcFL2bWy'
+api_secret = 'your_api_secret_here'
+
+client = Client(api_key, api_secret)
+
+def fetch_klines(symbol, interval, lookback):
+    klines = client.get_historical_klines(symbol, interval, lookback)
+    data = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+    data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+    data.set_index('timestamp', inplace=True)
+    data = data[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return data
+
+def apply_indicators(data):
+    data['EMA_9'] = ta.trend.ema_indicator(data['close'], window=9)
+    data['Bollinger_High'] = ta.volatility.bollinger_hband(data['close'], window=10)
+    data['Bollinger_Low'] = ta.volatility.bollinger_lband(data['close'], window=10)
+    data['RSI'] = ta.momentum.rsi(data['close'], window=9)
+    data['Stoch_RSI'] = ta.momentum.stochrsi_k(data['close'], window=9)
+    data['Signal_Long'] = (data['close'] < data['EMA_9']) & (data['Stoch_RSI'] < 0.2)
+    data['Signal_Short'] = (data['close'] > data['EMA_9']) & (data['Stoch_RSI'] > 0.8)
+
+    # Replace NaN values with None
+    data = data.where(pd.notnull(data), None)
+
+    return data
+
+def scalping_view(request):
+    symbol = 'BTCUSDT'
+    interval = '5m'
+    lookback = '1 day ago UTC'
+    data = fetch_klines(symbol, interval, lookback)
+    data = apply_indicators(data)
+    
+    # Convert the data to JSON format for Chart.js
+    chart_data = {
+        'labels': data.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        'datasets': [
+            {
+                'label': 'Close Price',
+                'data': data['close'].tolist(),
+                'borderColor': 'rgba(75, 192, 192, 1)',
+                'fill': False,  # Changed False to false
+            },
+            {
+                'label': 'EMA 9',
+                'data': data['EMA_9'].tolist(),
+                'borderColor': 'rgba(153, 102, 255, 1)',
+                'fill': False,  # Changed False to false
+            }
+        ]
+    }
+    
+    context = {'chart_data': json.dumps(chart_data)}  # Use json.dumps to serialize the data properly
+    
+    return render(request, 'scalping.html', context)
+# views.py
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                result['peers'].extend(db_peers)
+                logging.info(f"Retrieved peers from database: {db_peers}")
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            return JsonResponse({'status': 'Sync started'})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                result['peers'].extend(db_peers)
+                logging.info(f"Retrieved peers from database: {db_peers}")
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            return JsonResponse({'status': 'Sync started'})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            return JsonResponse(result)
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            return JsonResponse({'status': 'Sync started'})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc()})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Create an in-memory log handler to capture logs
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        self.logs.append(self.format(record))
+
+# Instantiate the in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    logs = log_handler.logs
+    return render(request, 'peersync.html', {'logs': logs})
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.logs
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.logs
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method', 'logs': log_handler.logs})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.logs
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.logs
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method', 'logs': log_handler.logs})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.logs
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.logs
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method', 'logs': log_handler.logs})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+            peer_info = json.loads(peer_info_str)
+            
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+            
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                try:
+                    peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                    peer.save()
+                    logging.info(f"Peer registered and saved to database: {peer_info}")
+                except Exception as e:
+                    logging.error(f"Error saving peer to database: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    result = {'error': str(e), 'traceback': traceback.format_exc()}
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+            
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+            
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                try:
+                    db_peers = list(Peer.objects.values('address', 'peer_id'))
+                    logging.info(f"Retrieved peers from database: {db_peers}")
+                    result['peers'].extend(db_peers)
+                except Exception as e:
+                    logging.error(f"Error retrieving peers from database: {str(e)}")
+                    logging.error(traceback.format_exc())
+                    result = {'error': str(e), 'traceback': traceback.format_exc()}
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+            
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+import websockets
+
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async def fetch_peers():
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+
+    try:
+        return await fetch_peers()
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+def run_discover_peers(master_url: str) -> list:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(discover_peers_from_master(master_url))
+    finally:
+        loop.close()
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await trio.to_thread.run_sync(run_discover_peers, master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+@csrf_exempt
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+@csrf_exempt
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+import websockets
+import json
+import threading
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+from django.views.decorators.csrf import csrf_exempt
+
+# Define protocols
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+SYNC_TRANSACTIONS_PROTOCOL = TProtocol("/sync/transactions/1.0.0")
+SYNC_WALLETS_PROTOCOL = TProtocol("/sync/wallets/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+# Define global data structures
+transactions = []
+wallets = {}
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async def fetch_peers():
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+
+    try:
+        return await fetch_peers()
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+def run_discover_peers(master_url: str) -> list:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(discover_peers_from_master(master_url))
+    finally:
+        loop.close()
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def sync_transactions_handler(stream: INetStream) -> None:
+    global transactions
+    while True:
+        try:
+            data = await stream.read(MAX_READ_LEN)
+            if data:
+                new_transactions = json.loads(data.decode())
+                transactions.extend(new_transactions)
+                transactions = list(set(transactions))  # Remove duplicates if necessary
+        except Exception as e:
+            logging.error(f"Error synchronizing transactions: {str(e)}")
+            break
+
+async def sync_wallets_handler(stream: INetStream) -> None:
+    global wallets
+    while True:
+        try:
+            data = await stream.read(MAX_READ_LEN)
+            if data:
+                new_wallets = json.loads(data.decode())
+                wallets.update(new_wallets)
+        except Exception as e:
+            logging.error(f"Error synchronizing wallets: {str(e)}")
+            break
+
+async def send_transactions(stream: INetStream, transactions: list) -> None:
+    try:
+        data = json.dumps(transactions).encode()
+        await stream.write(data)
+    except Exception as e:
+        logging.error(f"Error sending transactions: {str(e)}")
+
+async def send_wallets(stream: INetStream, wallets: dict) -> None:
+    try:
+        data = json.dumps(wallets).encode()
+        await stream.write(data)
+    except Exception as e:
+        logging.error(f"Error sending wallets: {str(e)}")
+
+async def handle_new_peer(stream: INetStream) -> None:
+    global transactions, wallets
+    await send_transactions(stream, transactions)
+    await send_wallets(stream, wallets)
+    # Continue with regular stream handling
+
+async def stream_handler(stream: INetStream) -> None:
+    await handle_new_peer(stream)
+    nursery.start_soon(read_data, stream)
+    nursery.start_soon(write_data, stream)
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                await handle_new_peer(stream)
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            host.set_stream_handler(SYNC_TRANSACTIONS_PROTOCOL, sync_transactions_handler)
+            host.set_stream_handler(SYNC_WALLETS_PROTOCOL, sync_wallets_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await trio.to_thread.run_sync(run_discover_peers, master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+@csrf_exempt
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+   
