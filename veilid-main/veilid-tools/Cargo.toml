@@ -1,0 +1,150 @@
+[package]
+# --- Bumpversion match - do not reorder
+name = "veilid-tools"
+version = "0.3.3"
+# ---
+description = "A collection of baseline tools for Rust development use by Veilid and Veilid-enabled Rust applications"
+authors = ["Veilid Team <contact@veilid.com>"]
+license = "MPL-2.0"
+edition = "2021"
+
+[lib]
+# staticlib for iOS tests, cydlib for android tests, rlib for everything else
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+default = ["rt-tokio"]
+rt-async-std = [
+    "async-std",
+    "async_executors/async_std",
+    "rtnetlink/smol_socket",
+]
+rt-tokio = [
+    "tokio",
+    "tokio-util",
+    "tokio-stream",
+    "rtnetlink/tokio_socket",
+    "async_executors/tokio_tp",
+    "async_executors/tokio_io",
+    "async_executors/tokio_timer",
+]
+rt-wasm-bindgen = ["async_executors/bindgen", "async_executors/timer"]
+
+veilid_tools_android_tests = ["dep:paranoid-android"]
+veilid_tools_ios_tests = ["dep:tracing", "dep:oslog", "dep:tracing-oslog"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
+
+[dependencies]
+tracing = { version = "0.1.40", features = [
+    "log",
+    "attributes",
+], optional = true }
+tracing-subscriber = { version = "0.3.18", features = [
+    "env-filter",
+], optional = true }
+log = { version = "0.4.20" }
+eyre = "0.6.11"
+static_assertions = "1.1.0"
+cfg-if = "1.0.0"
+thiserror = "1.0.50"
+futures-util = { version = "0.3.29", default-features = false, features = [
+    "alloc",
+] }
+parking_lot = "0.12.1"
+once_cell = "1.19.0"
+stop-token = { version = "0.7.0", default-features = false }
+rand = "0.8.5"
+rand_core = "0.6.4"
+backtrace = "0.3.69"
+fn_name = "0.1.0"
+range-set-blaze = "0.1.13"
+flume = { version = "0.11.0", features = ["async"] }
+
+# Dependencies for native builds only
+# Linux, Windows, Mac, iOS, Android
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-std = { version = "1.12.0", features = ["unstable"], optional = true }
+tokio = { version = "1.35.0", features = ["full"], optional = true }
+tokio-util = { version = "0.7.10", features = ["compat"], optional = true }
+tokio-stream = { version = "0.1.14", features = ["net"], optional = true }
+futures-util = { version = "0.3.29", default-features = false, features = [
+    "async-await",
+    "sink",
+    "std",
+    "io",
+] }
+chrono = "0.4.31"
+
+libc = "0.2.151"
+nix = { version = "0.27.1", features = ["user"] }
+
+# Dependencies for WASM builds only
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.89"
+js-sys = "0.3.66"
+wasm-bindgen-futures = "0.4.39"
+async_executors = { version = "0.7.0", default-features = false }
+getrandom = { version = "0.2", features = ["js"] }
+
+async-lock = "2.8.0"
+send_wrapper = { version = "0.6.0", features = ["futures"] }
+
+# Dependencies for Linux or Android
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+rtnetlink = { version = "=0.13.1", default-features = false }
+netlink-sys = { version = "=0.8.5" }
+netlink-packet-route = { version = "=0.17.1" }
+
+# Dependencies for Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+jni-sys = "0.3.0"
+ndk = { version = "0.7.0" }
+ndk-glue = { version = "0.7.0", features = ["logger"] }
+lazy_static = "1.4.0"
+paranoid-android = { version = "0.2.1", optional = true }
+android_logger = "0.13.3"
+
+# Dependencies for Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.9", features = ["iptypes", "iphlpapi", "winerror"] }
+
+# Dependencies for iOS
+[target.'cfg(target_os = "ios")'.dependencies]
+oslog = { version = "0.2.0", optional = true }
+tracing-oslog = { version = "0.1.2", optional = true }
+
+# Dependenices for all Unix (Linux, Android, MacOS, iOS)
+[target.'cfg(unix)'.dependencies]
+ifstructs = "0.1.1"
+
+### DEV DEPENDENCIES
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+simplelog = { version = "0.12.1", features = ["test"] }
+serial_test = "2.0.0"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+serial_test = { version = "2.0.0", default-features = false, features = [
+    "async",
+] }
+console_error_panic_hook = "0.1.7"
+wasm-bindgen-test = "0.3.39"
+wee_alloc = "0.4.5"
+wasm-logger = "0.2.0"
+tracing-wasm = { version = "0.2.1" }
+
+### BUILD OPTIONS
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-mutable-globals"]
+
+[package.metadata.ios]
+build_targets = [
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "x86_64-apple-ios",
+]
+deployment_target = "12.0"
+build_id_prefix = "com.veilid.veilidtools"

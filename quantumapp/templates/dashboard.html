@@ -694,6 +694,7 @@ body {
     <section id="network-status">
         <h2><i class="fas fa-network-wired"></i> Network Status</h2>
 		<button id="view-network-status-button" class="btn btn-primary">View Network Status</button>
+        <button id="sync-status-btn">Show Sync Status</button>
 
         <button id="view-network-chart" class="btn btn-primary" data-toggle="modal" data-target="#networkChartModal">
             <i class="fas fa-chart-line"></i> View Network Chart
@@ -703,39 +704,35 @@ body {
         </button>
     </section>
 </div>
-
+<div id="sync-status-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Sync Status</h2>
+            <div id="sync-status-content"></div>
+        </div>
+    </div>
     
-            <section id="create-transaction">
+          <section id="create-transaction">
     <h2><i class="fas fa-exchange-alt"></i> Create Transaction</h2>
-    <form id="transaction-form" action="{% url 'create_transaction' %}" method="post">
+    <form id="transactionForm">
         {% csrf_token %}
-        <div class="form-group">
-            <label for="sender"><i class="fas fa-user"></i> Sender:</label>
-            <select id="sender" name="sender" class="form-control" required>
-                {% if wallets %}
-                    {% for wallet in wallets %}
-                        <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
-                    {% endfor %}
-                {% else %}
-                    <option value="" disabled>No wallets available</option>
-                {% endif %}
-            </select>
-        </div>
-        <div class="form-group">
-            <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
-            <input type="text" id="receiver" name="receiver" class="form-control" required>
-        </div>
-        <div class="form-group">
-            <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
-            <input type="number" id="amount" name="amount" class="form-control" required>
-        </div>
-        <div class="form-group">
-            <label for="estimated-fee"><i class="fas fa-hand-holding-usd"></i> Estimated Fee:</label>
-            <input type="text" id="estimated-fee" class="form-control" readonly>
-        </div>
+        <label for="sender"><i class="fas fa-user"></i> Sender:</label>
+        <select id="sender" name="sender" required>
+            {% for wallet in wallets %}
+                <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
+            {% endfor %}
+        </select><br><br>
+        <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
+        <input type="text" id="receiver" name="receiver" required><br><br>
+        <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
+        <input type="number" id="amount" name="amount" required><br><br>
+        <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
+        <input type="number" id="fee" name="fee" required><br><br>
         <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
     </form>
 </section>
+
+
 
 
 <div class="modal fade" id="transactionModal" tabindex="-1" role="dialog" aria-labelledby="transactionModalLabel" aria-hidden="true">
@@ -2937,11 +2934,114 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 
 
+<script>
+    function showTransactionModal(message, transactionHash, approvalTime) {
+        document.getElementById('modalMessage').innerText = message;
+        document.getElementById('transactionHash').innerText = transactionHash;
+        document.getElementById('approvalTime').innerText = approvalTime;
 
+        $('#transactionModal').modal('show');
+    }
 
+    async function createTransaction(event) {
+        event.preventDefault();  // Prevent form from submitting the default way
 
+        const sender = document.getElementById('sender').value;
+        const receiver = document.getElementById('receiver').value;
+        const amount = document.getElementById('amount').value;
+        const fee = document.getElementById('fee').value;
 
+        const response = await fetch('{% url 'create_transaction' %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': '{{ csrf_token }}'  // Ensure CSRF token is included
+            },
+            body: new URLSearchParams({
+                'sender': sender,
+                'receiver': receiver,
+                'amount': amount,
+                'fee': fee,
+            })
+        });
 
+        const result = await response.json();
+
+        if (response.ok) {
+            const transactionHash = result.transaction_hash;
+            const approvalTime = result.approval_time || 'N/A';  // Ensure your backend sends this data
+            showTransactionModal('Transaction successful!', transactionHash, approvalTime);
+        } else {
+            showTransactionModal(`Transaction failed: ${result.error}`, '', '');
+        }
+    }
+
+    document.getElementById('transactionForm').addEventListener('submit', createTransaction);
+</script>
+<script>
+// app.js
+document.addEventListener('DOMContentLoaded', () => {
+    const syncStatusBtn = document.getElementById('sync-status-btn');
+    const modal = document.getElementById('sync-status-modal');
+    const closeBtn = document.getElementsByClassName('close')[0];
+    const syncStatusContent = document.getElementById('sync-status-content');
+
+    syncStatusBtn.onclick = function() {
+        modal.style.display = 'block';
+        startWebSocket();
+    }
+
+    closeBtn.onclick = function() {
+        modal.style.display = 'none';
+        stopWebSocket();
+    }
+
+    window.onclick = function(event) {
+        if (event.target == modal) {
+            modal.style.display = 'none';
+            stopWebSocket();
+        }
+    }
+
+    let socket;
+
+    function startWebSocket() {
+        socket = new WebSocket('ws://app.cashewswap.com/ws/unique-sync-url/');
+
+        socket.onopen = function() {
+            syncStatusContent.innerHTML += '<p>WebSocket connection opened.</p>';
+        };
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'sync_status') {
+                syncStatusContent.innerHTML += `<p>Sync Status: ${data.status}</p>`;
+                syncStatusContent.innerHTML += `<pre>${JSON.stringify(data.wallet_data, null, 2)}</pre>`;
+            } else if (data.type === 'libp2p_status') {
+                syncStatusContent.innerHTML += `<p>libp2p Status: ${data.status}</p>`;
+                syncStatusContent.innerHTML += `<pre>${JSON.stringify(data.peer_id, null, 2)}</pre>`;
+                if (data.error) {
+                    syncStatusContent.innerHTML += `<p>Error: ${data.error}</p>`;
+                }
+            }
+        };
+
+        socket.onclose = function() {
+            syncStatusContent.innerHTML += '<p>WebSocket connection closed.</p>';
+        };
+
+        socket.onerror = function(error) {
+            syncStatusContent.innerHTML += `<p>WebSocket error: ${error.message}</p>`;
+        };
+    }
+
+    function stopWebSocket() {
+        if (socket) {
+            socket.close();
+        }
+    }
+});
+</script>
 
     </body>
 </html>

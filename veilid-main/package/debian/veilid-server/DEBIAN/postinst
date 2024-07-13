@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -e
+
+# Add veilid user and group
+adduser --system --group veilid &>/dev/null || true
+
+# Make db folders
+mkdir -p /var/db/veilid-server/protected_store
+mkdir -p /var/db/veilid-server/table_store
+mkdir -p /var/db/veilid-server/block_store
+mkdir -p /var/db/veilid-server/ipc
+
+# Set permissions
+chown -R veilid:veilid /var/db/veilid-server
+chmod 0750 /var/db/veilid-server/protected_store
+chmod 0750 /var/db/veilid-server/table_store
+chmod 0750 /var/db/veilid-server/block_store
+chmod 0750 /var/db/veilid-server/ipc
+chmod 0750 /var/db/veilid-server
+
+chmod 755 /usr/bin/veilid-server
+
+# Add and start systemd unit
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+    # This will only remove masks created by d-s-h on package removal.
+    deb-systemd-helper unmask 'veilid-server.service' >/dev/null || true
+
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        echo "Veilid headless node is now installed. To enable the service run: systemctl enable --now veilid-server.service"
+        # Restart if it is enabled already
+        deb-systemd-invoke restart 'veilid-server.service' >/dev/null || true
+    fi
+fi

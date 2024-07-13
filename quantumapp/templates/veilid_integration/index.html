@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Veilid Node Manager</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .veilid-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .veilid-button {
+            margin: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        #veilid-status, #wallets-status, #transactions-status, #peers-status {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            display: inline-block;
+            width: 100%;
+            text-align: left;
+        }
+        #log-container {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            height: 200px;
+            overflow-y: scroll;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="veilid-container">
+        <h1>Veilid Node Manager</h1>
+        <button class="veilid-button" onclick="startVeilidNode()">Start Node</button>
+        <button class="veilid-button" onclick="checkVeilidStatus()">Check Status</button>
+        <button class="veilid-button" onclick="sendVeilidData()">Send Data</button>
+        <button class="veilid-button" onclick="receiveVeilidData()">Receive Data</button>
+        <button class="veilid-button" onclick="getPeers()">Get Peers</button>
+        
+        <div id="veilid-status">
+            <h3>Node Status:</h3>
+            <pre id="veilid-statusText">Not checked yet.</pre>
+        </div>
+        
+        <div id="wallets-status">
+            <h3>Wallets Syncing:</h3>
+            <pre id="wallets-statusText">Not checked yet.</pre>
+        </div>
+        
+        <div id="transactions-status">
+            <h3>Transactions Syncing:</h3>
+            <pre id="transactions-statusText">Not checked yet.</pre>
+        </div>
+        
+        <div id="peers-status">
+            <h3>Connected Peers:</h3>
+            <pre id="peers-statusText">Not checked yet.</pre>
+        </div>
+
+        <div id="log-container">
+            <h3>Server Logs:</h3>
+            <pre id="log-content"></pre>
+        </div>
+    </div>
+
+    <script>
+        const logContainer = document.getElementById('log-container');
+        const logContent = document.getElementById('log-content');
+
+        const logSocket = new WebSocket('ws://' + window.location.host + '/ws/veilid/logs/');
+
+        logSocket.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            logContent.textContent += data.message + '\n';
+            logContainer.scrollTop = logContainer.scrollHeight;
+        };
+
+        logSocket.onclose = function(e) {
+            console.error('WebSocket closed unexpectedly');
+        };
+
+        function startVeilidNode() {
+            fetch('/veilid/start-node/')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    document.getElementById('veilid-statusText').textContent = data.status;
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function checkVeilidStatus() {
+            fetch('/veilid/node-status/')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('veilid-statusText').textContent = JSON.stringify(data, null, 2);
+                    document.getElementById('wallets-statusText').textContent = JSON.stringify(data.wallets, null, 2);
+                    document.getElementById('transactions-statusText').textContent = JSON.stringify(data.transactions, null, 2);
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function sendVeilidData() {
+            let data = prompt("Enter data to send:");
+            fetch('/veilid/send-data/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ data: data })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('veilid-statusText').textContent = data.status;
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function receiveVeilidData() {
+            fetch('/veilid/receive-data/')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('veilid-statusText').textContent = JSON.stringify(data, null, 2);
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function getPeers() {
+            fetch('/veilid/get-peers/')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('peers-statusText').textContent = JSON.stringify(data, null, 2);
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                let cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    let cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+</body>
+</html>

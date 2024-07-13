@@ -241,25 +241,28 @@
         <button id="view-network-status-button" class="btn btn-primary"><i class="fas fa-eye"></i> View Network Status</button>
     </section>
     
-            <section id="create-transaction">
-            <h2><i class="fas fa-exchange-alt"></i> Create Transaction</h2>
-            <form action="{% url 'create_transaction' %}" method="post">
-                {% csrf_token %}
-                <label for="sender"><i class="fas fa-user"></i> Sender:</label>
-                <select id="sender" name="sender" required>
-                    {% for wallet in wallets %}
-                        <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
-                    {% endfor %}
-                </select><br><br>
-                <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
-                <input type="text" id="receiver" name="receiver" required><br><br>
-                <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
-                <input type="number" id="amount" name="amount" required><br><br>
-                <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
-                <input type="number" id="fee" name="fee" required><br><br>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
-            </form>
-        </section>
+           <section id="create-transaction">
+    <h2><i class="fas fa-exchange-alt"></i> Create Transaction</h2>
+    <form action="{% url 'create_transaction' %}" method="post">
+        {% csrf_token %}
+        <label for="sender"><i class="fas fa-user"></i> Sender:</label>
+        <select id="sender" name="sender" required>
+            {% for wallet in wallets %}
+                <option value="{{ wallet.address }}">{{ wallet.alias }} ({{ wallet.address }})</option>
+            {% endfor %}
+        </select><br><br>
+        <label for="receiver"><i class="fas fa-user"></i> Receiver:</label>
+        <input type="text" id="receiver" name="receiver" required><br><br>
+        <label for="amount"><i class="fas fa-coins"></i> Amount:</label>
+        <input type="number" id="amount" name="amount" required><br><br>
+        <label for="fee"><i class="fas fa-hand-holding-usd"></i> Transaction Fee:</label>
+        <input type="number" id="fee" name="fee" required><br><br>
+        <label for="master_url"><i class="fas fa-link"></i> Master URL:</label>
+        <input type="text" id="master_url" name="master_url" required><br><br>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Submit Transaction</button>
+    </form>
+</section>
+
 
 
     <section id="create-wallet">

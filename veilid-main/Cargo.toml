@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "veilid-tools",
+    "veilid-core",
+    "veilid-server",
+    "veilid-cli",
+    "veilid-flutter/rust",
+    "veilid-wasm",
+]
+resolver = "2"
+
+[patch.crates-io]
+cursive = { git = "https://gitlab.com/veilid/cursive.git" }
+cursive_core = { git = "https://gitlab.com/veilid/cursive.git" }
+
+# For local development
+# keyvaluedb = { path = "../keyvaluedb/keyvaluedb" }
+# keyvaluedb-memorydb = { path = "../keyvaluedb/keyvaluedb-memorydb" }
+# keyvaluedb-sqlite = { path = "../keyvaluedb/keyvaluedb-sqlite" }
+# keyvaluedb-web = { path = "../keyvaluedb/keyvaluedb-web" }
+# igd = { package = "veilid-igd", path = "../rust-igd" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[profile.dev.package.backtrace]
+opt-level = 3

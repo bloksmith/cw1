@@ -27,22 +27,11 @@ class WalletAdmin(admin.ModelAdmin):
 class ShardAdmin(admin.ModelAdmin):
     list_display = ('name', 'description')
     search_fields = ('name', 'description')
-
-@admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
-    list_display = ('hash', 'sender', 'receiver', 'amount', 'fee', 'timestamp', 'is_approved', 'shard', 'is_mining_reward')
-    search_fields = ('hash', 'sender__address', 'receiver__address')
-    list_filter = ('is_approved', 'timestamp', 'shard')
-    readonly_fields = ('hash', 'signature')
-    fieldsets = (
-        (None, {
-            'fields': ('sender', 'receiver', 'amount', 'fee', 'shard', 'parents', 'is_approved', 'is_mining_reward')
-        }),
-        ('Advanced options', {
-            'classes': ('collapse',),
-            'fields': ('hash', 'signature'),
-        }),
-    )
+    fieldsets = [
+        # Add other fields here, but exclude 'parents'
+        (None, {'fields': ['hash', 'sender', 'receiver', 'amount', 'fee', 'signature', 'timestamp', 'is_approved', 'shard', 'is_mining_reward', 'batch_processed']}),
+    ]
 
 @admin.register(TransactionMetadata)
 class TransactionMetadataAdmin(admin.ModelAdmin):

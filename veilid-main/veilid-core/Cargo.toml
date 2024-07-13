@@ -1,0 +1,280 @@
+[package]
+# --- Bumpversion match - do not reorder
+name = "veilid-core"
+version = "0.3.3"
+# ---
+description = "Core library used to create a Veilid node and operate it as part of an application"
+authors = ["Veilid Team <contact@veilid.com>"]
+edition = "2021"
+build = "build.rs"
+license = "MPL-2.0"
+resolver = "2"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+
+# Common features
+default = ["enable-crypto-vld0", "rt-tokio"]
+default-async-std = ["enable-crypto-vld0", "rt-async-std"]
+default-wasm = ["enable-crypto-vld0"]
+
+# Runtimes
+rt-async-std = [
+    "async-std",
+    "async-std-resolver",
+    "hickory-resolver",
+    "async_executors/async_std",
+    "veilid-tools/rt-async-std",
+]
+rt-tokio = [
+    "tokio",
+    "tokio-util",
+    "tokio-stream",
+    "hickory-resolver/tokio-runtime",
+    "async_executors/tokio_tp",
+    "async_executors/tokio_io",
+    "async_executors/tokio_timer",
+    "veilid-tools/rt-tokio",
+]
+
+# Crypto support features
+enable-crypto-vld0 = []
+enable-crypto-none = []
+
+# Debugging and testing features
+verbose-tracing = []
+tracking = []
+crypto-test = ["enable-crypto-vld0", "enable-crypto-none"]
+crypto-test-none = ["enable-crypto-none"]
+veilid_core_android_tests = ["dep:paranoid-android"]
+veilid_core_ios_tests = ["dep:tracing-oslog"]
+
+### DEPENDENCIES
+
+[dependencies]
+
+# Tools
+veilid-tools = { version = "0.3.3", path = "../veilid-tools", features = [
+    "tracing",
+], default-features = false }
+paste = "1.0.14"
+once_cell = "1.19.0"
+backtrace = "0.3.69"
+num-traits = "0.2.17"
+shell-words = "1.1.0"
+static_assertions = "1.1.0"
+cfg-if = "1.0.0"
+hex = "0.4.3"
+lazy_static = "1.4.0"
+directories = "5.0.1"
+
+# Logging
+tracing = { version = "0.1.40", features = ["log", "attributes"] }
+tracing-subscriber = "0.3.18"
+tracing-error = "0.2.0"
+eyre = "0.6.11"
+thiserror = "1.0.50"
+
+# Data structures
+enumset = { version = "1.1.3", features = ["serde"] }
+keyvaluedb = "0.1.2"
+range-set-blaze = "0.1.13"
+weak-table = "0.3.2"
+hashlink = { package = "veilid-hashlink", version = "0.1.0", features = [
+    "serde_impl",
+] }
+
+# System
+futures-util = { version = "0.3.29", default-features = false, features = [
+    "alloc",
+] }
+flume = { version = "0.11.0", features = ["async"] }
+parking_lot = "0.12.1"
+lock_api = "0.4.11"
+stop-token = { version = "0.7.0", default-features = false }
+
+# Crypto
+ed25519-dalek = { version = "2.1.0", default-features = false, features = [
+    "alloc",
+    "rand_core",
+    "digest",
+    "zeroize",
+] }
+x25519-dalek = { version = "2.0.0", default-features = false, features = [
+    "alloc",
+    "static_secrets",
+    "zeroize",
+    "precomputed-tables",
+] }
+curve25519-dalek = { version = "4.1.1", default-features = false, features = [
+    "alloc",
+    "zeroize",
+    "precomputed-tables",
+] }
+blake3 = { version = "1.5.0" }
+chacha20poly1305 = "0.10.1"
+chacha20 = "0.9.1"
+argon2 = "0.5.2"
+
+# Network
+async-std-resolver = { version = "0.24.0", optional = true }
+hickory-resolver = { version = "0.24.0", optional = true }
+
+# Serialization
+capnp = { version = "0.19.5", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.193", features = ["derive", "rc"] }
+serde_json = { version = "1.0.108" }
+serde-big-array = "0.5.1"
+json = "0.12.4"
+data-encoding = { version = "2.5.0" }
+schemars = "0.8.16"
+lz4_flex = { version = "0.11.1", default-features = false, features = [
+    "safe-encode",
+    "safe-decode",
+] }
+indent = "0.1.1"
+
+# Dependencies for native builds only
+# Linux, Windows, Mac, iOS, Android
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+
+# Tools
+config = { version = "0.13.4", features = ["yaml"] }
+bugsalot = { package = "veilid-bugsalot", version = "0.2.0" }
+chrono = "0.4.31"
+libc = "0.2.151"
+nix = "0.27.1"
+
+# System
+async-std = { version = "1.12.0", features = ["unstable"], optional = true }
+sysinfo = { version = "^0.30.6" }
+tokio = { version = "1.35.0", features = ["full"], optional = true }
+tokio-util = { version = "0.7.10", features = ["compat"], optional = true }
+tokio-stream = { version = "0.1.14", features = ["net"], optional = true }
+async-io = { version = "1.13.0" }
+futures-util = { version = "0.3.29", default-features = false, features = [
+    "async-await",
+    "sink",
+    "std",
+    "io",
+] }
+
+# Data structures
+keyring-manager = "0.5.1"
+keyvaluedb-sqlite = "0.1.2"
+
+# Network
+async-tungstenite = { package = "veilid-async-tungstenite", version = "0.23.0", features = [
+    "async-tls",
+] }
+igd = { package = "veilid-igd", version = "0.1.1" }
+async-tls = { package = "veilid-async-tls", version = "0.12.0" }
+webpki = "0.22.4"
+webpki-roots = "0.25.3"
+rustls = "0.21.10"
+rustls-pemfile = "1.0.4"
+socket2 = { version = "0.5.5", features = ["all"] }
+
+# Dependencies for WASM builds only
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+
+veilid-tools = { version = "0.3.3", path = "../veilid-tools", default-features = false, features = [
+    "rt-wasm-bindgen",
+] }
+
+# Tools
+getrandom = { version = "0.2.11", features = ["js"] }
+
+# System
+async_executors = { version = "0.7.0", default-features = false, features = [
+    "bindgen",
+    "timer",
+] }
+async-lock = "2.8.0"
+wasm-bindgen = "0.2.89"
+js-sys = "0.3.66"
+wasm-bindgen-futures = "0.4.39"
+send_wrapper = { version = "0.6.0", features = ["futures"] }
+serde_bytes = { version = "0.11", default-features = false, features = [
+    "alloc",
+] }
+tsify = { version = "0.4.5", features = ["js"] }
+serde-wasm-bindgen = "0.6.3"
+
+# Network
+ws_stream_wasm = "0.7.4"
+
+# Logging
+wasm-logger = "0.2.0"
+tracing-wasm = "0.2.1"
+
+# Data Structures
+keyvaluedb-web = "0.1.2"
+
+### Configuration for WASM32 'web-sys' crate
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3.66"
+features = [
+    'Document',
+    'HtmlDocument',
+    # 'Element',
+    # 'HtmlElement',
+    # 'Node',
+    'IdbFactory',
+    'IdbOpenDbRequest',
+    'Storage',
+    'Location',
+    'Window',
+]
+
+# Dependencies for Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+jni-sys = "0.3.0"
+ndk = { version = "0.7.0" }
+ndk-glue = { version = "0.7.0", features = ["logger"] }
+paranoid-android = { version = "0.2.1", optional = true }
+
+# Dependencies for Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.9", features = ["iptypes", "iphlpapi"] }
+windows = { version = "0.51.1", features = [
+    "Win32_NetworkManagement_Dns",
+    "Win32_Foundation",
+] }
+windows-permissions = "0.2.4"
+
+# Dependencies for iOS
+[target.'cfg(target_os = "ios")'.dependencies]
+tracing-oslog = { version = "0.1.2", optional = true }
+
+### DEV DEPENDENCIES
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+simplelog = { version = "0.12.1", features = ["test"] }
+serial_test = "2.0.0"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+serial_test = { version = "2.0.0", default-features = false, features = [
+    "async",
+] }
+wasm-bindgen-test = "0.3.39"
+console_error_panic_hook = "0.1.7"
+wee_alloc = "0.4.5"
+wasm-logger = "0.2.0"
+
+### BUILD OPTIONS
+
+[build-dependencies]
+capnpc = "0.19.0"
+glob = "0.3.1"
+filetime = "0.2.23"
+sha2 = "0.10.8"
+hex = "0.4.3"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-mutable-globals"]

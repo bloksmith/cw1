@@ -2314,8 +2314,6 @@ def generate_wallet():
         "address": account.address
     }
 
-
-
 @csrf_exempt
 def register(request):
     if request.method == 'POST':
@@ -2355,14 +2353,20 @@ def register(request):
 
             # Sync with peers after wallet creation
             destination = request.POST.get('destination', '')
-            sync_with_peers(destination)
+            port = 8001
+            sync_details = sync_with_peers(port=port, master_url=destination)
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logger.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
 
             return JsonResponse({
                 'message': 'User and wallet created',
                 'public_key': wallet.public_key,
                 'mnemonic': wallet_data['mnemonic'],
                 'address': wallet.address,
-                'balance': balance
+                'balance': balance,
+                'sync_details': sync_details
             })
 
         except IntegrityError as e:
@@ -9454,10 +9458,12 @@ def create_transaction(request):
                 process_pending_transactions()
 
             # Sync with peers after creating a transaction
-            destination = request.POST.get('destination', '')
-            sync_with_peers(destination)
+            sync_details = sync_with_peers()
+            
+            if not sync_details:
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
 
-            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash})
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash, 'sync_details': sync_details})
 
         except Wallet.DoesNotExist:
             logger.error("Wallet not found")
@@ -11301,7 +11307,6 @@ def sync_with_peers(destination):
 
     executor = ThreadPoolExecutor(max_workers=1)
     executor.submit(run_in_thread)
-    TOTAL_SUPPLY_CAP = Decimal('100000000')  # Example total supply cap
 
 def mine_single_block(user, user_private_key, user_address, shard_id):
     global mining_statistics
@@ -12209,23 +12214,46 @@ def run_in_thread(port, master_url):
     try:
         trio.run(run_sync, port, master_url)
     except Exception as e:
-        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Error during sync: {str(e)}")@csrf_exempt
+import hashlib
+
+def proof_of_work(last_proof):
+    proof = 0
+    while not valid_proof(last_proof, proof):
+        proof += 1
+    return proof
+
+def valid_proof(last_proof, proof):
+    guess = f'{last_proof}{proof}'.encode()
+    guess_hash = hashlib.sha256(guess).hexdigest()
+    return guess_hash[:4] == "0000"  # Ensure difficulty level is consistent with validation
+
+def validate_proof(proof, last_proof):
+    guess = f'{last_proof}{proof}'.encode()
+    guess_hash = hashlib.sha256(guess).hexdigest()
+    return guess_hash[:4] == "0000"  # This should match the difficulty level used in proof_of_work
+
+@csrf_exempt
 def mine_single_block(user, user_private_key, user_address, shard_id):
     global mining_statistics
     logger.info(f"Starting mining process for user {user} in shard {shard_id}")
-    
+
     try:
         shard = Shard.objects.get(id=shard_id)
         logger.info(f"Shard {shard.name} found.")
     except Shard.DoesNotExist:
         logger.error("Shard not found")
         return
-    
+
     transactions = Transaction.objects.filter(is_approved=False, shard=shard)
-    previous_block_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+    last_proof = '0000000000000000000000000000000000000000000000000000000000000000'
     logger.info("Generating proof of work...")
-    proof = proof_of_work(previous_block_hash)
+    proof = proof_of_work(last_proof)
     logger.info(f"Proof of work generated: {proof}")
+
+    if not validate_proof(proof, last_proof):
+        logger.error("Invalid proof of work")
+        return
 
     try:
         miner_wallet = Wallet.objects.get(user=user)
@@ -12245,7 +12273,7 @@ def mine_single_block(user, user_private_key, user_address, shard_id):
             transaction.save()
             total_fees += Decimal(transaction.fee)
             approved_transactions.append(transaction)
-    
+
     logger.info(f"Total fees from transactions: {total_fees}")
 
     current_time = timezone.now()
@@ -12269,13 +12297,13 @@ def mine_single_block(user, user_private_key, user_address, shard_id):
     logger.info(f"Miner wallet balance updated: {miner_wallet.balance}")
 
     new_block_hash = generate_unique_hash()
-    new_block = Block(hash=new_block_hash, previous_hash=previous_block_hash, timestamp=current_time)
+    new_block = Block(hash=new_block_hash, previous_hash=last_proof, timestamp=current_time)
     new_block.save()  # Save the new block to the database
     logger.info(f"New block created with hash: {new_block_hash}")
 
     # Update the DAG
-    if previous_block_hash in dag:
-        dag[previous_block_hash].children.append(new_block)
+    if last_proof in dag:
+        dag[last_proof].children.append(new_block)
     dag[new_block_hash] = new_block
     logger.info("DAG updated with new block.")
 
@@ -12328,7 +12356,12 @@ def mine_single_block(user, user_private_key, user_address, shard_id):
 
     # Sync with peers after mining a block
     logger.info("Starting sync with peers...")
-    sync_with_peers()
+    sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+    if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+        logger.error("Failed to sync with peers")
+    else:
+        logger.info(f"Sync with peers successful: {sync_details}")
+
 
 def sync_with_peers():
     try:
@@ -12499,21 +12532,35 @@ def sync_with_peers():
 import logging
 import subprocess
 import json
-
+import json
+import subprocess
+import logging
 def sync_with_master(port, master_url):
     try:
         response = subprocess.check_output(
-            ["curl", "-X", "POST", "https://app.cashewstable.com/sync/", 
+            ["curl", "-X", "POST", "https://app.cashewstable.com/sync/",
              "-d", f"port={port}&master_url={master_url}"],
             stderr=subprocess.STDOUT
         )
-        logging.info(f"Sync response: {response.decode('utf-8')}")
-        return json.loads(response.decode('utf-8'))
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+        
+        response_data = json.loads(response_str)
+        return response_data
+
     except subprocess.CalledProcessError as e:
         logging.error(f"Error during sync: {e.output.decode('utf-8')}")
         return {"peer_id": None, "multiaddress": None, "hint": None}
+    except json.JSONDecodeError as e:
+        logging.error(f"Error decoding JSON: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+def sync_with_peers():
+    port = 8001  # Replace with the actual port you are using
+    master_url = 'ws://app.cashewstable.com:8765'  # Replace with the actual master URL
 
-def sync_with_peers(port, master_url):
     sync_details = sync_with_master(port, master_url)
     peer_id = sync_details.get("peer_id", "None")
     multiaddress = sync_details.get("multiaddress", "None")
@@ -12527,10 +12574,11 @@ def sync_with_peers(port, master_url):
 
     return sync_details
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     port = 8000
-    master_url = "ws://localhost:8765"
+    master_url = "ws://app.cashewstable.com:8765"
     sync_details = sync_with_peers(port, master_url)
 
     # Save sync details to a file for the HTML template to read
@@ -17437,3 +17485,2614 @@ def start_sync(request):
     return JsonResponse({'error': 'Invalid request method'})
 
    
+@csrf_exempt
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from the database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+@csrf_exempt
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import logging
+import multiaddr
+import trio
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.typing import TProtocol
+import sys
+import traceback
+import asyncio
+import websockets
+import json
+import threading
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+from django.views.decorators.csrf import csrf_exempt
+
+# Define protocols
+PROTOCOL_ID = TProtocol("/sync/1.0.0")
+SYNC_TRANSACTIONS_PROTOCOL = TProtocol("/sync/transactions/1.0.0")
+SYNC_WALLETS_PROTOCOL = TProtocol("/sync/wallets/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+# Define global data structures
+transactions = []
+wallets = {}
+
+class P2PSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        if P2PSingleton._instance is not None:
+            raise Exception("This class is a singleton!")
+        self.host = None
+        self.create_host()
+        self.peer_id = self.host.get_id().pretty() if self.host else "Unknown"
+        self.multiaddress = None
+        self.context = {'multiaddress': None, 'hint': None, 'peer_id': None}
+
+    def create_host(self):
+        try:
+            self.host = new_host()
+            if self.host:
+                logging.info("Host created successfully")
+            else:
+                logging.error("Failed to create host")
+        except Exception as e:
+            logging.error(f"Error creating host: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+
+    def close_host(self):
+        if self.host is not None:
+            try:
+                self.host.close()
+                logging.info("Host closed successfully")
+            except Exception as e:
+                logging.error(f"Error closing host: {str(e)}")
+                logging.error(f"Traceback: {traceback.format_exc()}")
+            finally:
+                self.host = None
+
+async def discover_peers_from_master(master_url: str) -> list:
+    async def fetch_peers():
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({"action": "get_peers"}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            peers = data["peers"]
+            return peers
+
+    try:
+        return await fetch_peers()
+    except Exception as e:
+        logging.error(f"Error discovering peers from master: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return []
+
+def run_discover_peers(master_url: str) -> list:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(discover_peers_from_master(master_url))
+    finally:
+        loop.close()
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        try:
+            read_bytes = await stream.read(MAX_READ_LEN)
+            if read_bytes:
+                read_string = read_bytes.decode()
+                if read_string != "\n":
+                    print("\x1b[32m %s\x1b[0m " % read_string, end="")
+        except Exception as e:
+            logging.error(f"Error reading data: {str(e)}")
+            break
+
+async def write_data(stream: INetStream) -> None:
+    try:
+        async_f = trio.wrap_file(sys.stdin)
+        while True:
+            line = await async_f.readline()
+            await stream.write(line.encode())
+    except Exception as e:
+        logging.error(f"Error writing data: {str(e)}")
+
+async def sync_transactions_handler(stream: INetStream) -> None:
+    global transactions
+    while True:
+        try:
+            data = await stream.read(MAX_READ_LEN)
+            if data:
+                new_transactions = json.loads(data.decode())
+                transactions.extend(new_transactions)
+                transactions = list(set(transactions))  # Remove duplicates if necessary
+                logging.info(f"Synced transactions: {new_transactions}")  # Log synced transactions
+        except Exception as e:
+            logging.error(f"Error synchronizing transactions: {str(e)}")
+            break
+
+async def sync_wallets_handler(stream: INetStream) -> None:
+    global wallets
+    while True:
+        try:
+            data = await stream.read(MAX_READ_LEN)
+            if data:
+                new_wallets = json.loads(data.decode())
+                wallets.update(new_wallets)
+                logging.info(f"Synced wallets: {new_wallets}")  # Log synced wallets
+        except Exception as e:
+            logging.error(f"Error synchronizing wallets: {str(e)}")
+            break
+
+async def send_transactions(stream: INetStream, transactions: list) -> None:
+    try:
+        data = json.dumps(transactions).encode()
+        await stream.write(data)
+    except Exception as e:
+        logging.error(f"Error sending transactions: {str(e)}")
+
+async def send_wallets(stream: INetStream, wallets: dict) -> None:
+    try:
+        data = json.dumps(wallets).encode()
+        await stream.write(data)
+    except Exception as e:
+        logging.error(f"Error sending wallets: {str(e)}")
+
+async def handle_new_peer(stream: INetStream) -> None:
+    global transactions, wallets
+    await send_transactions(stream, transactions)
+    await send_wallets(stream, wallets)
+    # Continue with regular stream handling
+
+async def stream_handler(stream: INetStream) -> None:
+    await handle_new_peer(stream)
+    nursery.start_soon(read_data, stream)
+    nursery.start_soon(write_data, stream)
+
+async def run_sync(port: int, master_url: str) -> None:
+    p2p_instance = P2PSingleton.get_instance()
+    host = p2p_instance.host
+    if host is None:
+        logging.error("Host is None, cannot start sync")
+        return
+    peer_id = p2p_instance.peer_id
+    localhost_ip = "127.0.0.1"
+
+    if p2p_instance.multiaddress is None:
+        p2p_instance.multiaddress = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{peer_id}"
+
+    multiaddress = p2p_instance.multiaddress
+
+    logging.info(f"Using Peer ID: {peer_id}")
+    logging.info(f"Generated Multiaddress: {multiaddress}")
+
+    p2p_instance.context.update({
+        'peer_id': peer_id,
+        'multiaddress': multiaddress,
+        'hint': (
+            f"Run this from the same folder in another console:\n\n"
+            f"python chat.py -p {int(port) + 1} -d {multiaddress}\n"
+        )
+    })
+    logging.info(f"Context inside run_sync: {p2p_instance.context}")
+
+    try:
+        async with host.run(listen_addrs=[multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")]), trio.open_nursery() as nursery:
+            async def stream_handler(stream: INetStream) -> None:
+                await handle_new_peer(stream)
+                nursery.start_soon(read_data, stream)
+                nursery.start_soon(write_data, stream)
+
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            host.set_stream_handler(SYNC_TRANSACTIONS_PROTOCOL, sync_transactions_handler)
+            host.set_stream_handler(SYNC_WALLETS_PROTOCOL, sync_wallets_handler)
+            logging.info("Waiting for incoming connection...")
+
+            # Discover peers from the master node
+            discovered_peers = await trio.to_thread.run_sync(run_discover_peers, master_url)
+            logging.info(f"Discovered peers: {discovered_peers}")
+
+            for peer_address in discovered_peers:
+                try:
+                    peer_info = info_from_p2p_addr(multiaddr.Multiaddr(peer_address))
+                    await host.connect(peer_info)
+                    stream = await host.new_stream(peer_info.peer_id, [PROTOCOL_ID])
+                    nursery.start_soon(read_data, stream)
+                    nursery.start_soon(write_data, stream)
+                    logging.info(f"Connected to peer {peer_info.addrs[0]}")
+                except Exception as e:
+                    logging.error(f"Error connecting to peer {peer_info.peer_id}: {str(e)}")
+
+            await trio.sleep_forever()
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise
+
+def run_in_thread(port, master_url):
+    try:
+        p2p_instance = P2PSingleton.get_instance()
+        p2p_instance.close_host()  # Ensure any previous host is closed
+        p2p_instance.create_host()  # Create a new host
+        trio.run(run_sync, port, master_url)
+    except Exception as e:
+        logging.error(f"Error during sync: {str(e)}")
+        logging.error(f"Traceback: {traceback.format_exc()}")
+
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+@csrf_exempt
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+
+            # Fetch synced transactions and wallets
+            synced_transactions = transactions
+            synced_wallets = wallets
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs, 'synced_transactions': synced_transactions, 'synced_wallets': synced_wallets})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+import json
+import traceback
+from django.shortcuts import render
+from django.http import JsonResponse
+from .models import Peer
+import asyncio
+import websockets
+import logging
+import threading
+import subprocess
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+# Log handler to store logs in memory
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append(log_entry)
+
+    def get_logs(self):
+        return self.logs
+
+# Initialize in-memory log handler
+log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(log_handler)
+
+async def register_peer_async(master_url, peer_info):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'register_peer', 'peer_info': peer_info}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in register_peer_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+async def get_peers_async(master_url):
+    try:
+        async with websockets.connect(master_url) as websocket:
+            await websocket.send(json.dumps({'action': 'get_peers'}))
+            response = await websocket.recv()
+            data = json.loads(response)
+            return data
+    except Exception as e:
+        logging.error(f"Error in get_peers_async: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'error': str(e), 'traceback': traceback.format_exc()}
+
+def peersync(request):
+    return render(request, 'peersync.html')
+
+@csrf_exempt
+def register_peer(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for register_peer: {data}")
+
+            master_url = data.get('master_url')
+            peer_info_str = data.get('peer_info')
+
+            if not master_url:
+                raise ValueError("master_url is required")
+            if not peer_info_str:
+                raise ValueError("peer_info is required")
+
+            peer_info = json.loads(peer_info_str)
+
+            # Register peer asynchronously
+            result = asyncio.run(register_peer_async(master_url, peer_info))
+
+            # If registration is successful, save to the database
+            if 'error' not in result:
+                logging.info(f"Registering peer: {peer_info}")
+                peer = Peer.objects.create(address=peer_info['address'], peer_id=peer_info['peer_id'])
+                peer.save()
+                logging.info(f"Peer registered and saved to database: {peer_info}")
+            else:
+                logging.error(f"Peer registration failed: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in register_peer: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            logging.info(f"Received data for get_peers: {data}")
+
+            master_url = data.get('master_url')
+            if not master_url:
+                raise ValueError("master_url is required")
+
+            # Get peers asynchronously
+            result = asyncio.run(get_peers_async(master_url))
+
+            # If no errors, extend result with peers from database
+            if 'error' not in result:
+                db_peers = list(Peer.objects.values('address', 'peer_id'))
+                logging.info(f"Retrieved peers from database: {db_peers}")
+                result['peers'].extend(db_peers)
+            else:
+                logging.error(f"Error getting peers: {result['error']}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'result': result, 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in get_peers: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def start_sync(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            port = data.get('port')
+            master_url = data.get('master_url')
+            if not port or not master_url:
+                raise ValueError("Both port and master_url are required")
+
+            # Start the P2P synchronization in a separate thread
+            threading.Thread(target=run_in_thread, args=(port, master_url)).start()
+            logging.info(f"Sync started on port {port} with master URL {master_url}")
+
+            logs = log_handler.get_logs()
+            return JsonResponse({'status': 'Sync started', 'logs': logs})
+        except Exception as e:
+            logging.error(f"Error in start_sync: {str(e)}")
+            logging.error(traceback.format_exc())
+            logs = log_handler.get_logs()
+            return JsonResponse({'error': str(e), 'traceback': traceback.format_exc(), 'logs': logs})
+    return JsonResponse({'error': 'Invalid request method'})
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logger.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logger.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logger.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logger.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            # Store the pending transaction
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+
+            # Check if the number of pending transactions has reached 100
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            # Sync with peers after creating a transaction
+            sync_details = sync_with_peers(port=8001, master_url='ws://app.cashewstable.com:8765')
+            
+            if not sync_details:
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash, 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logger.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logger.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logger.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+def initiate_sync(port, master_url):
+    try:
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", "https://app.cashewstable.com/sync/",
+             "-d", f"port={port}&master_url={master_url}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+        return json.loads(response_str)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"status": "error", "message": "Failed to initiate sync"}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"status": "error", "message": "Unexpected error"}
+
+def fetch_sync_details():
+    try:
+        response = subprocess.check_output(
+            ["curl", "-X", "GET", "https://app.cashewstable.com/get_sync_details"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync details response: {response_str}")
+        return json.loads(response_str)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error fetching sync details: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error fetching sync details: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+def sync_with_master(port, master_url):
+    try:
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", "https://app.cashewstable.com/sync/",
+             "-d", f"port={port}&master_url={master_url}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+        return json.loads(response_str)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+def sync_with_peers(port, master_url):
+    sync_with_master(port, master_url)
+    sync_details = fetch_sync_details()
+    
+    peer_id = sync_details.get("peer_id", "None")
+    multiaddress = sync_details.get("multiaddress", "None")
+    hint = sync_details.get("hint", "None")
+
+    logging.info(f"Peer ID: {peer_id}")
+    logging.info(f"Multiaddress: {multiaddress}")
+    logging.info(f"Hint: {hint}")
+
+    return sync_details
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='ws://app.cashewstable.com:8765')
+            
+            if 'error' in sync_details:
+                logging.error(f"Failed to sync with peers: {sync_details['error']}")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash, 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+import json
+import subprocess
+import logging
+import traceback
+from decimal import Decimal
+from django.shortcuts import render
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .models import Peer, Wallet, PendingTransaction, Shard
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def sync_with_peers(port, master_url):
+    try:
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+        
+        # Simulating the generation of multiaddress and peer_id
+        peer_id = "Qmaa281qWCVrxMXtSehMbke5q5bAe16iG9LZ73DCNCTrj4"
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+        
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+        
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+            
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash, 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def process_pending_transactions():
+    pending_transactions = PendingTransaction.objects.all()
+    for pending_transaction in pending_transactions:
+        completed_transaction = CompletedTransaction(
+            sender=pending_transaction.sender,
+            receiver=pending_transaction.receiver,
+            amount=pending_transaction.amount,
+            fee=pending_transaction.fee,
+            hash=pending_transaction.hash,
+            signature=pending_transaction.signature
+        )
+        completed_transaction.save()
+        pending_transaction.delete()
+        logging.info(f"Processed and moved to completed transactions: {completed_transaction}")
+from django.http import JsonResponse
+from .models import PendingTransaction, CompletedTransaction
+
+def get_transaction(request, transaction_hash):
+    try:
+        transaction = PendingTransaction.objects.get(hash=transaction_hash)
+        transaction_data = {
+            'sender': transaction.sender.address,
+            'receiver': transaction.receiver.address,
+            'amount': str(transaction.amount),
+            'fee': str(transaction.fee),
+            'hash': transaction.hash,
+            'signature': transaction.signature,
+            'status': 'pending'
+        }
+    except PendingTransaction.DoesNotExist:
+        try:
+            transaction = CompletedTransaction.objects.get(hash=transaction_hash)
+            transaction_data = {
+                'sender': transaction.sender.address,
+                'receiver': transaction.receiver.address,
+                'amount': str(transaction.amount),
+                'fee': str(transaction.fee),
+                'hash': transaction.hash,
+                'signature': transaction.signature,
+                'status': 'completed'
+            }
+        except CompletedTransaction.DoesNotExist:
+            return JsonResponse({'error': 'Transaction not found'}, status=404)
+
+    return JsonResponse({'transaction': transaction_data})
+
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+from django.shortcuts import render
+from django.http import JsonResponse
+from .veilid_manager import start_veilid_node, check_node_status, send_data_to_node, receive_data_from_node
+
+def veilid_index(request):
+    return render(request, 'veilid_integration/index.html')
+
+def start_node(request):
+    start_veilid_node()
+    return JsonResponse({'status': 'Veilid node started'})
+
+def node_status(request):
+    status = check_node_status()
+    return JsonResponse(status)
+
+def send_data(request):
+    if request.method == 'POST':
+        data = request.POST.get('data')
+        send_data_to_node(data)
+        return JsonResponse({'status': 'Data sent'})
+    return JsonResponse({'status': 'Invalid request'}, status=400)
+
+def receive_data(request):
+    data = receive_data_from_node()
+    return JsonResponse({'data': data})
+from django.shortcuts import render
+from django.http import JsonResponse
+from .veilid_manager import start_veilid_node, check_node_status, send_data_to_node, receive_data_from_node
+
+def veilid_index(request):
+    return render(request, 'veilid_integration/index.html')
+
+def start_node(request):
+    start_veilid_node()
+    return JsonResponse({'status': 'Veilid node started'})
+
+def node_status(request):
+    status = check_node_status()
+    return JsonResponse(status)
+
+def send_data(request):
+    if request.method == 'POST':
+        data = request.POST.get('data')
+        send_data_to_node(data)
+        return JsonResponse({'status': 'Data sent'})
+    return JsonResponse({'status': 'Invalid request'}, status=400)
+
+def receive_data(request):
+    data = receive_data_from_node()
+    return JsonResponse({'data': data})
+
+@csrf_exempt
+def start_node(request):
+    if request.method == 'POST':
+        start_veilid_node()
+        return JsonResponse({'status': 'Veilid node started'})
+    return JsonResponse({'status': 'Invalid request'}, status=400)
+
+@csrf_exempt
+def node_status(request):
+    status = check_node_status()
+    wallets = get_wallets_syncing()
+    transactions = get_transactions_syncing()
+    status.update({'wallets': wallets, 'transactions': transactions})
+    return JsonResponse(status)
+
+@csrf_exempt
+def send_data(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            response = send_data_to_node(data)
+            print('Data received:', data)
+            print('Response:', response)
+            return JsonResponse(response)
+        except json.JSONDecodeError:
+            return JsonResponse({'status': 'error', 'details': 'Invalid JSON'}, status=400)
+    return JsonResponse({'status': 'Invalid request'}, status=400)
+
+@csrf_exempt
+def receive_data(request):
+    data = receive_data_from_node()
+    print('Data received from node:', data)
+    return JsonResponse(data)
+
+@csrf_exempt
+def get_peers(request):
+    if request.method == 'GET':
+        peers = get_peers()
+        return JsonResponse({'peers': peers})
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def generate_peer_id():
+    key_pair = KeyPair.generate()
+    peer_id = PeerID.from_pubkey(key_pair.public_key)
+    return peer_id.pretty()
+
+def sync_with_peers(port, master_url):
+    try:
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+        
+        # Generate dynamic peer ID and multiaddress
+        peer_id = generate_peer_id()
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+        
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+        
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+def generate_wallet():
+    # Generate a new mnemonic phrase
+    mnemo = Mnemonic("english")
+    mnemonic_phrase = mnemo.generate(strength=128)
+    seed = mnemo.to_seed(mnemonic_phrase)
+
+    # Generate a private key using the seed
+    private_key = binascii.hexlify(seed[:32]).decode('utf-8')
+
+    # Generate an Ethereum account from the private key
+    account = Account.from_key(private_key)
+
+    return {
+        "mnemonic": mnemonic_phrase,
+        "private_key": private_key,
+        "public_key": account.key.hex(),
+        "address": account.address
+    }
+
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def generate_peer_id():
+    key_pair = KeyPair.generate()
+    peer_id = PeerID.from_pubkey(key_pair.public_key)
+    return peer_id.pretty()
+
+def sync_with_peers(port, master_url):
+    try:
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+
+        # Generate dynamic peer ID and multiaddress
+        peer_id = generate_peer_id()
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            logger.debug("Starting wallet generation.")
+            wallet_data = generate_wallet()
+            logger.debug(f"Generated wallet data: {wallet_data}")
+
+            username = wallet_data['public_key']
+            password = None
+            logger.debug(f"Generated username: {username}")
+
+            user = User.objects.create_user(username=username, password=password)
+            logger.debug(f"Created user: {user}")
+
+            alias = generate_unique_alias(wallet_data['public_key'])
+            address = wallet_data['address']
+            logger.debug(f"Generated alias: {alias}, address: {address}")
+
+            wallet = Wallet(
+                user=user,
+                public_key=wallet_data['public_key'],
+                private_key=wallet_data['private_key'],
+                alias=alias,
+                address=address
+            )
+            wallet.save()
+            logger.debug(f"Saved wallet: {wallet}")
+
+            user = authenticate(username=username, password=password)
+            if user is not None:
+                login(request, user)
+                logger.debug(f"User authenticated and logged in: {user}")
+
+            balance = get_wallet_balance(wallet_data['public_key'])
+            logger.debug(f"Retrieved wallet balance: {balance}")
+
+            # Sync with peers after wallet creation
+            destination = request.POST.get('destination', '')
+            sync_details = sync_with_peers(port=8001, master_url=destination)
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logger.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            return JsonResponse({
+                'message': 'User and wallet created',
+                'public_key': wallet.public_key,
+                'mnemonic': wallet_data['mnemonic'],
+                'address': wallet.address,
+                'balance': balance,
+                'sync_details': sync_details
+            })
+
+        except IntegrityError as e:
+            logger.error(f"Integrity error during registration: {str(e)}")
+            return JsonResponse({'error': 'User with this public key already exists or alias conflict'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {str(e)}")
+            return JsonResponse({'error': 'An unexpected error occurred'}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+from libp2p.crypto.keys import KeyPair
+from libp2p.peer.id import ID
+def generate_wallet():
+    # Generate a new mnemonic phrase
+    mnemo = Mnemonic("english")
+    mnemonic_phrase = mnemo.generate(strength=128)
+    seed = mnemo.to_seed(mnemonic_phrase)
+
+    # Generate a private key using the seed
+    private_key = binascii.hexlify(seed[:32]).decode('utf-8')
+
+    # Generate an Ethereum account from the private key
+    account = Account.from_key(private_key)
+
+    return {
+        "mnemonic": mnemonic_phrase,
+        "private_key": private_key,
+        "public_key": account.key.hex(),
+        "address": account.address
+    }
+
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def generate_peer_id():
+    key_pair = KeyPair.generate()
+    peer_id = ID.from_pubkey(key_pair.public_key)
+    return peer_id.pretty()
+
+
+def sync_with_peers(port, master_url):
+    try:
+        if not master_url:
+            raise ValueError("master_url is required")
+
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+
+        # Generate dynamic peer ID and multiaddress
+        peer_id = generate_peer_id()
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            logger.debug("Starting wallet generation.")
+            wallet_data = generate_wallet()
+            logger.debug(f"Generated wallet data: {wallet_data}")
+
+            username = wallet_data['public_key']
+            password = None
+            logger.debug(f"Generated username: {username}")
+
+            user = User.objects.create_user(username=username, password=password)
+            logger.debug(f"Created user: {user}")
+
+            alias = generate_unique_alias(wallet_data['public_key'])
+            address = wallet_data['address']
+            logger.debug(f"Generated alias: {alias}, address: {address}")
+
+            wallet = Wallet(
+                user=user,
+                public_key=wallet_data['public_key'],
+                private_key=wallet_data['private_key'],
+                alias=alias,
+                address=address
+            )
+            wallet.save()
+            logger.debug(f"Saved wallet: {wallet}")
+
+            user = authenticate(username=username, password=password)
+            if user is not None:
+                login(request, user)
+                logger.debug(f"User authenticated and logged in: {user}")
+
+            balance = get_wallet_balance(wallet_data['public_key'])
+            logger.debug(f"Retrieved wallet balance: {balance}")
+
+            # Sync with peers after wallet creation
+            destination = request.POST.get('destination', 'https://app.cashewstable.com/sync/')
+            sync_details = sync_with_peers(port=8001, master_url=destination)
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logger.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            return JsonResponse({
+                'message': 'User and wallet created',
+                'public_key': wallet.public_key,
+                'mnemonic': wallet_data['mnemonic'],
+                'address': wallet.address,
+                'balance': balance,
+                'sync_details': sync_details
+            })
+
+        except IntegrityError as e:
+            logger.error(f"Integrity error during registration: {str(e)}")
+            return JsonResponse({'error': 'User with this public key already exists or alias conflict'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {str(e)}")
+            return JsonResponse({'error': 'An unexpected error occurred'}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def generate_wallet():
+    # Generate a new mnemonic phrase
+    mnemo = Mnemonic("english")
+    mnemonic_phrase = mnemo.generate(strength=128)
+    seed = mnemo.to_seed(mnemonic_phrase)
+
+    # Generate a private key using the seed
+    private_key = binascii.hexlify(seed[:32]).decode('utf-8')
+
+    # Generate an Ethereum account from the private key
+    account = Account.from_key(private_key)
+
+    return {
+        "mnemonic": mnemonic_phrase,
+        "private_key": private_key,
+        "public_key": account.key.hex(),
+        "address": account.address
+    }
+
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def generate_peer_id():
+    key_pair = KeyPair.generate()
+    peer_id = PeerID.from_pubkey(key_pair.public_key)
+    return peer_id.pretty()
+
+def sync_with_peers(port, master_url):
+    try:
+        if not master_url:
+            raise ValueError("master_url is required")
+
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+
+        # Generate dynamic peer ID and multiaddress
+        peer_id = generate_peer_id()
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            logger.debug("Starting wallet generation.")
+            wallet_data = generate_wallet()
+            logger.debug(f"Generated wallet data: {wallet_data}")
+
+            username = wallet_data['public_key']
+            password = None
+            logger.debug(f"Generated username: {username}")
+
+            user = User.objects.create_user(username=username, password=password)
+            logger.debug(f"Created user: {user}")
+
+            alias = generate_unique_alias(wallet_data['public_key'])
+            address = wallet_data['address']
+            logger.debug(f"Generated alias: {alias}, address: {address}")
+
+            wallet = Wallet(
+                user=user,
+                public_key=wallet_data['public_key'],
+                private_key=wallet_data['private_key'],
+                alias=alias,
+                address=address
+            )
+            wallet.save()
+            logger.debug(f"Saved wallet: {wallet}")
+
+            user = authenticate(username=username, password=password)
+            if user is not None:
+                login(request, user)
+                logger.debug(f"User authenticated and logged in: {user}")
+
+            balance = get_wallet_balance(wallet_data['public_key'])
+            logger.debug(f"Retrieved wallet balance: {balance}")
+
+            # Sync with peers after wallet creation
+            destination = request.POST.get('destination', 'https://app.cashewstable.com/sync/')
+            sync_details = sync_with_peers(port=8001, master_url=destination)
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logger.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            return JsonResponse({
+                'message': 'User and wallet created',
+                'public_key': wallet.public_key,
+                'mnemonic': wallet_data['mnemonic'],
+                'address': wallet.address,
+                'balance': balance,
+                'sync_details': sync_details
+            })
+
+        except IntegrityError as e:
+            logger.error(f"Integrity error during registration: {str(e)}")
+            return JsonResponse({'error': 'User with this public key already exists or alias conflict'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {str(e)}")
+            return JsonResponse({'error': 'An unexpected error occurred'}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+import binascii
+import logging
+import subprocess
+from decimal import Decimal
+from mnemonic import Mnemonic
+from eth_account import Account
+from django.contrib.auth.models import User
+from django.db import IntegrityError
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.contrib.auth import authenticate, login
+from .models import Wallet, PendingTransaction, Shard
+from libp2p.crypto.keys import KeyPair
+from libp2p.crypto.rsa import RSAPrivateKey, RSAPublicKey, create_new_key_pair
+from libp2p.peer.id import ID as PeerID
+
+# Ensure logging is configured
+logging.basicConfig(level=logging.INFO)
+
+def generate_wallet():
+    # Generate a new mnemonic phrase
+    mnemo = Mnemonic("english")
+    mnemonic_phrase = mnemo.generate(strength=128)
+    seed = mnemo.to_seed(mnemonic_phrase)
+
+    # Generate a private key using the seed
+    private_key = binascii.hexlify(seed[:32]).decode('utf-8')
+
+    # Generate an Ethereum account from the private key
+    account = Account.from_key(private_key)
+
+    return {
+        "mnemonic": mnemonic_phrase,
+        "private_key": private_key,
+        "public_key": account.key.hex(),
+        "address": account.address
+    }
+
+def generate_multiaddress(ip, port, peer_id):
+    return f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+
+def generate_peer_id():
+    key_pair = create_new_key_pair()
+    peer_id = PeerID.from_pubkey(key_pair.public_key)
+    return peer_id.pretty()
+def sync_with_peers(port, master_url):
+    try:
+        if not master_url:
+            raise ValueError("master_url is required")
+
+        # Simulate the sync process with the master
+        response = subprocess.check_output(
+            ["curl", "-X", "POST", master_url, "-d", f"port={port}"],
+            stderr=subprocess.STDOUT
+        )
+        response_str = response.decode('utf-8')
+        logging.info(f"Sync response: {response_str}")
+
+        # Generate dynamic peer ID and multiaddress
+        peer_id = generate_peer_id()
+        multiaddress = generate_multiaddress("127.0.0.1", port, peer_id)
+
+        sync_details = {
+            "peer_id": peer_id,
+            "multiaddress": multiaddress,
+            "hint": "Hint information if available"
+        }
+
+        logging.info(f"Generated Multiaddress: {multiaddress}")
+        return sync_details
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error during sync initiation: {e.output.decode('utf-8')}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+    except Exception as e:
+        logging.error(f"Unexpected error during sync initiation: {str(e)}")
+        return {"peer_id": None, "multiaddress": None, "hint": None}
+
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.models import User
+from django.db import IntegrityError
+import json
+import logging
+from .models import Wallet
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from .libp2p_node import start_node
+import asyncio
+
+logger = logging.getLogger(__name__)
+node = start_node()
+
+@csrf_exempt
+def register(request):
+    if request.method == 'POST':
+        try:
+            logger.debug("Starting wallet generation.")
+            wallet_data = generate_wallet()
+            logger.debug(f"Generated wallet data: {wallet_data}")
+
+            username = wallet_data['public_key']
+            password = None
+            logger.debug(f"Generated username: {username}")
+
+            user = User.objects.create_user(username=username, password=password)
+            logger.debug(f"Created user: {user}")
+
+            alias = generate_unique_alias(wallet_data['public_key'])
+            address = wallet_data['address']
+            logger.debug(f"Generated alias: {alias}, address: {address}")
+
+            wallet = Wallet(
+                user=user,
+                public_key=wallet_data['public_key'],
+                private_key=wallet_data['private_key'],
+                alias=alias,
+                address=address
+            )
+            wallet.save()
+            logger.debug(f"Saved wallet: {wallet}")
+
+            user = authenticate(username=username, password=password)
+            if user is not None:
+                login(request, user)
+                logger.debug(f"User authenticated and logged in: {user}")
+
+            balance = get_wallet_balance(wallet_data['public_key'])
+            logger.debug(f"Retrieved wallet balance: {balance}")
+
+            # Sync with peers after wallet creation
+            async_to_sync(perform_peer_sync)({
+                'public_key': wallet.public_key,
+                'address': wallet.address,
+                'alias': wallet.alias,
+                'balance': balance
+            })
+
+            return JsonResponse({
+                'message': 'User and wallet created',
+                'public_key': wallet.public_key,
+                'mnemonic': wallet_data['mnemonic'],
+                'address': wallet.address,
+                'balance': balance
+            })
+
+        except IntegrityError as e:
+            logger.error(f"Integrity error during registration: {str(e)}")
+            return JsonResponse({'error': 'User with this public key already exists or alias conflict'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error during registration: {str(e)}")
+            return JsonResponse({'error': 'An unexpected error occurred'}, status=500)
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+async def perform_peer_sync(wallet_data):
+    channel_layer = get_channel_layer()
+    await channel_layer.group_send(
+        'node_sync_group',
+        {
+            'type': 'sync_wallet',
+            'wallet_data': wallet_data
+        }
+    )
+
+    # Broadcast using libp2p
+    async def broadcast_wallet_libp2p(wallet_data):
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+
+    await broadcast_wallet_libp2p(wallet_data)
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Update wallet balances
+            sender.balance -= (amount + fee)
+            receiver.balance += amount
+            sender.save()
+            receiver.save()
+            logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+            if PendingTransaction.objects.count() >= 100:
+                process_pending_transactions()
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved: {pending_transaction}")
+
+            # Process the transaction immediately or periodically
+            process_transaction(pending_transaction)
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def process_transaction(transaction):
+    try:
+        sender = transaction.sender
+        receiver = transaction.receiver
+        amount = transaction.amount
+        fee = transaction.fee
+
+        if sender.balance < (amount + fee):
+            logging.error("Insufficient balance for the transaction")
+            transaction.is_approved = False
+            transaction.save()
+            return
+
+        # Update wallet balances
+        sender.balance -= (amount + fee)
+        receiver.balance += amount
+        sender.save()
+        receiver.save()
+        logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+        # Mark the transaction as approved
+        transaction.is_approved = True
+        transaction.save()
+        logging.info(f"Transaction {transaction.hash} approved and processed")
+
+    except Wallet.DoesNotExist:
+        logging.error("Wallet not found during transaction processing")
+    except Exception as e:
+        logging.error(f"Error processing transaction: {e}")
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            # Create and save the pending transaction
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard,
+                is_approved=True  # Immediately approve the transaction
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved and approved: {pending_transaction}")
+
+            # Process the transaction immediately
+            process_transaction(pending_transaction)
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def process_transaction(transaction):
+    try:
+        sender = transaction.sender
+        receiver = transaction.receiver
+        amount = transaction.amount
+        fee = transaction.fee
+
+        if sender.balance < (amount + fee):
+            logging.error("Insufficient balance for the transaction")
+            transaction.is_approved = False
+            transaction.save()
+            return
+
+        # Update wallet balances
+        sender.balance -= (amount + fee)
+        receiver.balance += amount
+        sender.save()
+        receiver.save()
+        logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+        # Save the transaction as an approved transaction
+        approved_transaction = Transaction(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            fee=fee,
+            hash=transaction.hash,
+            signature=transaction.signature,
+            shard=transaction.shard,
+            is_approved=True
+        )
+        approved_transaction.save()
+        logging.info(f"Transaction {transaction.hash} approved and processed as {approved_transaction}")
+
+    except Wallet.DoesNotExist:
+        logging.error("Wallet not found during transaction processing")
+    except Exception as e:
+        logging.error(f"Error processing transaction: {e}")
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            # Create and save the pending transaction
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard,
+                is_approved=True  # Immediately approve the transaction
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved and approved: {pending_transaction}")
+
+            # Process the transaction immediately
+            approved_transaction = process_transaction(pending_transaction)
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def process_transaction(transaction):
+    try:
+        sender = transaction.sender
+        receiver = transaction.receiver
+        amount = transaction.amount
+        fee = transaction.fee
+
+        if sender.balance < (amount + fee):
+            logging.error("Insufficient balance for the transaction")
+            transaction.is_approved = False
+            transaction.save()
+            return None
+
+        # Update wallet balances
+        sender.balance -= (amount + fee)
+        receiver.balance += amount
+        sender.save()
+        receiver.save()
+        logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+        # Save the transaction as an approved transaction
+        approved_transaction = Transaction(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            fee=fee,
+            hash=transaction.hash,
+            signature=transaction.signature,
+            shard=transaction.shard,
+            is_approved=True
+        )
+        approved_transaction.save()
+        logging.info(f"Transaction {transaction.hash} approved and processed as {approved_transaction}")
+
+        # Remove the pending transaction
+        transaction.delete()
+
+        return approved_transaction
+
+    except Wallet.DoesNotExist:
+        logging.error("Wallet not found during transaction processing")
+        return None
+    except Exception as e:
+        logging.error(f"Error processing transaction: {e}")
+        return None
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            # Create and save the pending transaction
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard,
+                is_approved=True  # Immediately approve the transaction
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved and approved: {pending_transaction}")
+
+            # Process the transaction immediately
+            approved_transaction = process_transaction(pending_transaction)
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+def process_transaction(transaction):
+    try:
+        sender = transaction.sender
+        receiver = transaction.receiver
+        amount = transaction.amount
+        fee = transaction.fee
+
+        if sender.balance < (amount + fee):
+            logging.error("Insufficient balance for the transaction")
+            transaction.is_approved = False
+            transaction.save()
+            return None
+
+        # Update wallet balances
+        sender.balance -= (amount + fee)
+        receiver.balance += amount
+        sender.save()
+        receiver.save()
+        logging.info(f"Updated balances - Sender: {sender.balance}, Receiver: {receiver.balance}")
+
+        # Save the transaction as an approved transaction
+        approved_transaction = Transaction(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            fee=fee,
+            hash=transaction.hash,
+            signature=transaction.signature,
+            shard=transaction.shard,
+            is_approved=True
+        )
+        approved_transaction.save()
+        logging.info(f"Transaction {transaction.hash} approved and processed as {approved_transaction}")
+
+        # Remove the pending transaction
+        transaction.delete()
+
+        return approved_transaction
+
+    except Wallet.DoesNotExist:
+        logging.error("Wallet not found during transaction processing")
+        return None
+    except Exception as e:
+        logging.error(f"Error processing transaction: {e}")
+        return None
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        start_time = time.time()  # Record start time
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard,
+                is_approved=True  # Immediately approve the transaction
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved and approved: {pending_transaction}")
+
+            # Process the transaction immediately
+            process_transaction(pending_transaction)
+
+            sync_details = sync_with_peers(port=8001, master_url='https://app.cashewstable.com/sync/')
+
+            if 'peer_id' not in sync_details or sync_details['peer_id'] is None:
+                logging.error("Failed to sync with peers")
+                return JsonResponse({'error': 'Failed to sync with peers'}, status=500)
+
+            approval_time = round(time.time() - start_time, 2)  # Calculate approval time
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'sync_details': sync_details, 'approval_time': approval_time})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)

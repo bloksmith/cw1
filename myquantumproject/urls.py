@@ -68,7 +68,13 @@ urlpatterns = [
     path('register_peer/', views.register_peer, name='register_peer'),
     path('get_peers/', views.get_peers, name='get_peers'),
     path('scalping/', views.scalping_view, name='scalping'),
-    path('start_sync/', views.start_sync, name='start_sync'),
+    path('veilid/start-node/', views.start_node, name='start_node'),
+    path('veilid/node-status/', views.node_status, name='node_status'),
+    path('veilid/send-data/', views.send_data, name='send_data'),
+    path('veilid/receive-data/', views.receive_data, name='receive_data'),
+    path('veilid/get-peers/', views.get_peers, name='get_peers'),  # New endpoint for getting peers
+
+    path('veilid/', views.veilid_index, name='veilid_index'),  # New unique path
 
 
 

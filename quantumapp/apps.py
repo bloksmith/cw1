@@ -64,7 +64,13 @@ class QuantumappConfig(AppConfig):
     name = 'quantumapp'
 
     def ready(self):
-        logger.info("Starting register with master node script")
-        threading.Thread(target=run_script_with_retries, args=('register_with_master.py',)).start()
-        logger.info("Starting WebSocket server")
-        threading.Thread(target=start_websocket_server, daemon=True).start()
+        # Ensure Django is fully ready before running the startup tasks
+        from django.db.models.signals import post_migrate
+        from django.dispatch import receiver
+
+        @receiver(post_migrate)
+        def startup_tasks(sender, **kwargs):
+            logger.info("Starting register with master node script")
+            threading.Thread(target=run_script_with_retries, args=('register_with_master.py',)).start()
+            logger.info("Starting WebSocket server")
+            threading.Thread(target=start_websocket_server, daemon=True).start()

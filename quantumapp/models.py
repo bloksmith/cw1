@@ -1,18 +1,16 @@
 from django.db import models
-import hashlib
-import json
 from django.contrib.auth.models import User
-from django.db import models
-from django.contrib.auth.models import User
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
+from decimal import Decimal
 from django.utils.text import slugify
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization, hashes, padding
 from django.utils import timezone
-import os 
-from web3 import Web3  # Ensure Web3 is imported
-from django.db import models
+from web3 import Web3
+import hashlib
+import os
+import uuid
 
+# Node model
 class Node(models.Model):
     address = models.CharField(max_length=255, unique=True)
     public_key = models.TextField()
@@ -21,12 +19,8 @@ class Node(models.Model):
 def default_address():
     # Generating a random address (this can be any address generation logic)
     return hashlib.sha256(os.urandom(32)).hexdigest()[:32]
-from django.db import models
-from django.contrib.auth.models import User
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization, hashes, padding
-from django.utils.text import slugify
 
+# Wallet model
 class Wallet(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     public_key = models.TextField()
@@ -69,9 +63,7 @@ class Wallet(models.Model):
         self.save()
 
     def generate_address(self, public_key):
-        public_key_bytes = serialization.load_pem_public_key(
-            public_key,
-        ).public_bytes(
+        public_key_bytes = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
@@ -84,29 +76,27 @@ class Wallet(models.Model):
             self.alias = slugify(self.user.username)
         super(Wallet, self).save(*args, **kwargs)
 
-
-
+# Shard model
 class Shard(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
-from django.db import models
-from decimal import Decimal
-import hashlib
 
 class Transaction(models.Model):
     hash = models.CharField(max_length=255, unique=True)
-    sender = models.ForeignKey(Wallet, related_name='sent_transactions', on_delete=models.CASCADE)
-    receiver = models.ForeignKey(Wallet, related_name='received_transactions', on_delete=models.CASCADE)
+    sender = models.ForeignKey(Wallet, related_name='transactions_sent', on_delete=models.CASCADE)
+    receiver = models.ForeignKey(Wallet, related_name='transactions_received', on_delete=models.CASCADE)
     amount = models.FloatField()
-    fee = models.FloatField(default=0.0)  # Add default value for fee
-    signature = models.TextField()  # Placeholder for digital signature
+    fee = models.FloatField(default=0.0)
+    feev2 = models.FloatField(default=0.0)
+    signature = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
     is_approved = models.BooleanField(default=False)
-    shard = models.ForeignKey(Shard, on_delete=models.CASCADE, related_name='transactions')
-    parents = models.ManyToManyField('self', symmetrical=False, related_name='children')
-    is_mining_reward = models.BooleanField(default=False)  # Add this field if needed
+    shard = models.ForeignKey(Shard, on_delete=models.CASCADE, null=True, blank=True)
+    is_mining_reward = models.BooleanField(default=False)
     batch_processed = models.BooleanField(default=False)
+    # Remove parents field temporarily
+    # parents = models.ManyToManyField('self', through='TransactionParent', through_fields=('child', 'parent'), symmetrical=False, related_name='children')
 
     def create_hash(self):
         sha = hashlib.sha256()
@@ -114,44 +104,113 @@ class Transaction(models.Model):
         return sha.hexdigest()
 
     def estimate_size(self):
-        # Estimate the size of the transaction in bytes
         size = len(self.sender.address) + len(self.receiver.address) + len(str(self.amount)) + len(self.signature)
         return size
 
     @staticmethod
     def estimate_fee(transaction_size, congestion_factor=1.0):
-        BASE_FEE_RATE = Decimal('0.00000001')  # Base fee rate per byte
+        BASE_FEE_RATE = Decimal('0.000000000000001')
         fee = BASE_FEE_RATE * transaction_size * congestion_factor
         return fee
 
+def get_default_transaction():
+    ## Ensure this creates a default transaction if one does not exist
+    transaction, created = Transaction.objects.get_or_create(
+        hash='default_hash', 
+        defaults={
+            'amount': 0.0,
+            'fee': 0.0,
+            'signature': '',
+            'is_approved': True
+        }
+    )
+    return transaction.id
 
+# TransactionParent model
+class TransactionParent(models.Model):
+    parent = models.ForeignKey('Transaction', related_name='parent_links', on_delete=models.CASCADE, default=get_default_transaction)
+    child = models.ForeignKey(Transaction, related_name='child_links', on_delete=models.CASCADE)
+
+# TransactionMetadata model
 class TransactionMetadata(models.Model):
     transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='metadata')
     type = models.CharField(max_length=100)
     status = models.CharField(max_length=100)
     metadata = models.TextField()
-from django.db import models
-from django.contrib.auth.models import User
-import uuid
 
+# PendingTransaction model
+class PendingTransaction(models.Model):
+    sender = models.ForeignKey(Wallet, related_name='pending_transactions_sent', on_delete=models.CASCADE)
+    receiver = models.ForeignKey(Wallet, related_name='pending_transactions_received', on_delete=models.CASCADE)
+    amount = models.DecimalField(max_digits=20, decimal_places=8)
+    fee = models.DecimalField(max_digits=20, decimal_places=8)
+    hash = models.CharField(max_length=256, unique=True)
+    signature = models.CharField(max_length=256)
+    is_approved = models.BooleanField(default=False)
+    shard = models.ForeignKey(Shard, on_delete=models.CASCADE, null=True, blank=True)
+
+
+# CompletedTransaction model
+class CompletedTransaction(models.Model):
+    sender = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='completed_transactions_sent')
+    receiver = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='completed_transactions_received')
+    amount = models.DecimalField(max_digits=18, decimal_places=8)
+    fee = models.DecimalField(max_digits=18, decimal_places=8)
+    hash = models.CharField(max_length=64, unique=True)
+    signature = models.CharField(max_length=255)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+# Block model
+class Block(models.Model):
+    hash = models.CharField(max_length=64, unique=True)
+    previous_hash = models.CharField(max_length=64)
+    timestamp = models.DateTimeField()
+    children = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.children = []
+
+# Peer model
+class Peer(models.Model):
+    address = models.CharField(max_length=255)
+    peer_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.peer_id} @ {self.address}"
+
+# CustomToken model
+class CustomToken(models.Model):
+    address = models.CharField(max_length=255, unique=True)
+    symbol = models.CharField(max_length=10)
+    balance = models.DecimalField(max_digits=20, decimal_places=0, default=0)
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, null=True, blank=True)
+    name = models.CharField(max_length=255, null=True, blank=True)
+    total_supply = models.DecimalField(max_digits=20, decimal_places=0, default=0)
+
+    def __str__(self):
+        return f'{self.symbol} - {self.address}'
+
+# Pool model
 class Pool(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     host = models.ForeignKey(User, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
-    hashrate = models.FloatField(default=0.0)  # Example field for hashrate
-    rewards = models.FloatField(default=0.0)   # Example field for rewards
+    hashrate = models.FloatField(default=0.0)
+    rewards = models.FloatField(default=0.0)
 
     def __str__(self):
         return self.name
 
-
+# PoolMember model
 class PoolMember(models.Model):
     pool = models.ForeignKey(Pool, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
-from django.db import models
-from django.contrib.auth.models import User
+
+# Miner model
 class Miner(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     resource_capability = models.IntegerField(default=1)
@@ -159,46 +218,18 @@ class Miner(models.Model):
     reward = models.FloatField(default=0)
     tasks_assigned = models.IntegerField(default=0)
     tasks_completed = models.IntegerField(default=0)
-    task_completion_times = models.JSONField(default=list)  # Store times as a list of floats
+    task_completion_times = models.JSONField(default=list)
 
     def __str__(self):
         return f"Miner {self.user.username}"
-# models.py
 
-from django.db import models
-from django.db import models
+# Contract model
 class Contract(models.Model):
     address = models.CharField(max_length=42)
     abi = models.TextField()
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(default=timezone.now)
-from django.db import models
-
-from django.db import models
-
-class CustomToken(models.Model):
-    address = models.CharField(max_length=255, unique=True)
-    symbol = models.CharField(max_length=10)
-    balance = models.DecimalField(max_digits=20, decimal_places=0, default=0)
-    wallet = models.ForeignKey('Wallet', on_delete=models.CASCADE, null=True, blank=True)
-    name = models.CharField(max_length=255, null=True, blank=True)
-    total_supply = models.DecimalField(max_digits=20, decimal_places=0, default=0)
-
-    def __str__(self):
-        return f'{self.symbol} - {self.address}'
-from django.contrib.auth.models import User
-from decimal import Decimal
-from django.contrib.auth.models import User
-from decimal import Decimal
-
-def ensure_system_wallet():
-    system_user, created = User.objects.get_or_create(username='system', defaults={'email': 'system@example.com', 'password': 'systempassword'})
-    system_wallet, created = Wallet.objects.get_or_create(user=system_user, defaults={'balance': Decimal('1000000000')})
-    if system_wallet.balance < Decimal('1000000000'):
-        system_wallet.balance = Decimal('1000000000')
-        system_wallet.save()
-    return system_wallet
-
+# TokenPair model
 class TokenPair(models.Model):
     NETWORK_CHOICES = [
         ('ETH_MAINNET', 'Ethereum Mainnet'),
@@ -243,6 +274,7 @@ class TokenPair(models.Model):
     def __str__(self):
         return f"{self.token1_symbol}/{self.token2_symbol} - {self.name}"
 
+# TokenQuote model
 class TokenQuote(models.Model):
     from_token = models.CharField(max_length=42)
     to_token = models.CharField(max_length=42)
@@ -286,36 +318,3 @@ class TokenQuote(models.Model):
 
     def __str__(self):
         return f"{self.from_token} to {self.to_token} at {self.price} on {self.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
-from django.db import models
-
-class Block(models.Model):
-    hash = models.CharField(max_length=64, unique=True)
-    previous_hash = models.CharField(max_length=64)
-    timestamp = models.DateTimeField()
-    # Add transient children attribute, not persisted in the database
-    children = []
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.children = []
-
-from django.db import models
-from django.utils import timezone
-
-class PendingTransaction(models.Model):
-    sender = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='pending_sender')
-    receiver = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='pending_receiver')
-    amount = models.DecimalField(max_digits=20, decimal_places=8)
-    fee = models.DecimalField(max_digits=20, decimal_places=8)
-    timestamp = models.DateTimeField(default=timezone.now)
-    hash = models.CharField(max_length=64)
-    signature = models.CharField(max_length=256)
-from django.db import models
-
-class Peer(models.Model):
-    address = models.CharField(max_length=255)
-    peer_id = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.peer_id} @ {self.address}"

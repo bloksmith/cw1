@@ -136,6 +136,13 @@ AUTHENTICATION_BACKENDS = [
 
 SECURE_SSL_REDIRECT = False
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+import os
+
+# Path to the Veilid configuration file
+VEILID_CONFIG_PATH = os.path.join(BASE_DIR, 'quantumapp', 'veilid_config.json')
+
+# Path to the Veilid server binary
+VEILID_BINARY_PATH = '/usr/bin/veilid-server'
 
 INSTALLED_APPS = [
     'django.contrib.admin',

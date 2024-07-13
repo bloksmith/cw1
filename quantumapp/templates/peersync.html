@@ -49,22 +49,32 @@
 
             console.log("Data being sent to server:", { master_url: masterUrl, peer_info: peerInfo });
 
-            const response = await fetch('/register_peer/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken
-                },
-                body: JSON.stringify({ master_url: masterUrl, peer_info: peerInfo })
-            });
+            try {
+                const response = await fetch('/register_peer/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify({ master_url: masterUrl, peer_info: peerInfo })
+                });
 
-            const data = await response.json();
-            let responseText = JSON.stringify(data.result, null, 2);
-            if (data.error) {
-                responseText += `\nTraceback:\n${data.traceback}`;
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    const data = await response.json();
+                    let responseText = JSON.stringify(data.result, null, 2);
+                    if (data.error) {
+                        responseText += `\nTraceback:\n${data.traceback}`;
+                    }
+                    document.getElementById('registerPeerResponse').innerText = responseText;
+                    displayLogs(data.logs);
+                } else {
+                    document.getElementById('registerPeerResponse').innerText = 'Unexpected response format';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('registerPeerResponse').innerText = 'Error occurred: ' + error.message;
             }
-            document.getElementById('registerPeerResponse').innerText = responseText;
-            displayLogs(data.logs);
         }
 
         async function getPeers() {
@@ -124,6 +134,7 @@
             }
             document.getElementById('startSyncResponse').innerText = responseText;
             displayLogs(data.logs);
+            displaySyncedData(data.synced_transactions, data.synced_wallets); // Update this line
         }
 
         function displayLogs(logs) {
@@ -136,50 +147,58 @@
             });
         }
 
+        function displaySyncedData(transactions, wallets) {
+            const transactionsContainer = document.getElementById('syncedTransactions');
+            const walletsContainer = document.getElementById('syncedWallets');
+
+            transactionsContainer.innerHTML = JSON.stringify(transactions, null, 2);
+            walletsContainer.innerHTML = JSON.stringify(wallets, null, 2);
+        }
+
         window.onload = function() {
             // Automatically fill fields with default values
             document.getElementById('registerPeerMasterUrl').value = "ws://localhost:8765";
-            document.getElementById('registerPeerInfo').value = '{ "address": "/ip4/127.0.0.1/tcp/8001", "peer_id": "Qma6CchKfBkVRc29wfcYkLL5tkB91gbRS9NLMjdMnEHnL7" }';
-            document.getElementById('getPeersMasterUrl').value = "ws://localhost:8765";
-            document.getElementById('startSyncPort').value = "8001";
-            document.getElementById('startSyncMasterUrl').value = "ws://localhost:8765";
-        }
-    </script>
-    <style>
-        .title {
-            font-size: 2em;
-            text-align: center;
-        }
-        .section-title {
-            font-size: 1.5em;
-            margin-top: 20px;
-        }
-        .input-field {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-        }
-        .action-button {
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        .response {
-            margin-top: 10px;
-            font-style: italic;
-            white-space: pre-wrap; /* Preserve whitespace and line breaks */
-        }
-        #logContainer {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #f9f9f9;
-            border: 1px solid #ccc;
-            max-height: 300px;
-            overflow-y: scroll;
-        }
-    </style>
+        document.getElementById('registerPeerInfo').value = '{ "address": "/ip4/127.0.0.1/tcp/8001", "peer_id": "Qma6CchKfBkVRc29wfcYkLL5tkB91gbRS9NLMjdMnEHnL7" }';
+        document.getElementById('getPeersMasterUrl').value = "ws://localhost:8765";
+        document.getElementById('startSyncPort').value = "8001";
+        document.getElementById('startSyncMasterUrl').value = "ws://localhost:8765";
+    }
+</script>
+<style>
+    .title {
+        font-size: 2em;
+        text-align: center;
+    }
+    .section-title {
+        font-size: 1.5em;
+        margin-top: 20px;
+    }
+    .input-field {
+        width: 100%;
+        padding: 10px;
+        margin: 10px 0;
+    }
+    .action-button {
+        padding: 10px 20px;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        cursor: pointer;
+    }
+    .response {
+        margin-top: 10px;
+        font-style: italic;
+        white-space: pre-wrap; /* Preserve whitespace and line breaks */
+    }
+    #logContainer {
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #f9f9f9;
+        border: 1px solid #ccc;
+        max-height: 300px;
+        overflow-y: scroll;
+    }
+</style>
 </head>
 <body>
     <h1 class="title">Peer Sync Web UI</h1>
@@ -205,6 +224,14 @@
     </div>
     <div id="logContainer" class="section-title">
         <h2>Logs</h2>
+    </div>
+    <div>
+        <h2 class="section-title">Synced Transactions</h2>
+        <pre id="syncedTransactions" class="response"></pre>
+    </div>
+    <div>
+        <h2 class="section-title">Synced Wallets</h2>
+        <pre id="syncedWallets" class="response"></pre>
     </div>
 </body>
 </html>
