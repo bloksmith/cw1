@@ -1698,6 +1698,7 @@ import json
 import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from asgiref.sync import sync_to_async
+import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -1807,3 +1808,144 @@ class QuantumSyncConsumer(AsyncWebsocketConsumer):
                         'peer_id': peer_id.pretty(),
                         'error': str(e)
                     }))
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+class QuantumSyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        await self.channel_layer.group_add("node_sync_group", self.channel_name)
+        await self.accept()
+        logger.info("QuantumSyncConsumer connected")
+
+    async def disconnect(self, close_code):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        await self.channel_layer.group_discard("node_sync_group", self.channel_name)
+        logger.info(f"QuantumSyncConsumer disconnected with close code {close_code}")
+
+    async def sync_wallet(self, event):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        wallet_data = event['wallet_data']
+        logger.debug(f"Received wallet data for sync: {wallet_data}")
+        await self.create_wallet(wallet_data)
+
+        # Send sync status update to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'sync_status',
+            'status': 'Wallet synced',
+            'wallet_data': wallet_data
+        }))
+
+        # Broadcast using libp2p
+        await self.broadcast_wallet_libp2p(wallet_data)
+
+    @sync_to_async
+    def create_wallet(self, wallet_data):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        try:
+            user, created = User.objects.get_or_create(username=wallet_data['public_key'])
+            if created:
+                Wallet.objects.create(
+                    user=user,
+                    public_key=wallet_data['public_key'],
+                    address=wallet_data['address'],
+                    alias=wallet_data['alias'],
+                    balance=wallet_data['balance']
+                )
+                logger.info(f"Wallet synchronized: {wallet_data['public_key']}")
+            else:
+                logger.info(f"Wallet already exists: {wallet_data['public_key']}")
+        except Exception as e:
+            logger.error(f"Error creating wallet: {str(e)}")
+
+    async def broadcast_wallet_libp2p(self, wallet_data):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        node = await start_node()
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+
+                    # Send libp2p status update to the frontend
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Broadcasted wallet data',
+                        'peer_id': peer_id.pretty()
+                    }))
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Error broadcasting wallet data',
+                        'peer_id': peer_id.pretty(),
+                        'error': str(e)
+                    }))
+
+    async def receive(self, text_data):
+        import json
+        import logging
+        from channels.generic.websocket import AsyncWebsocketConsumer
+        from asgiref.sync import sync_to_async
+        from .models import Wallet, User
+        from .libp2p_node import start_node
+        from django.conf import settings
+
+        logger.debug(f"Received raw text data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            if 'type' in data and data['type'] == 'sync_wallet':
+                await self.sync_wallet(data)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError: {str(e)}")
+            logger.error(f"Received invalid JSON: {text_data}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON format'
+            }))
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Unexpected error occurred'
+            }))
