@@ -4,9 +4,9 @@ import json
 import logging
 import traceback
 from django.conf import settings
+import django
 import os
 import sys
-import django
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'quantumapp.settings')
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 async def register_with_master_node_async():
     master_node_url = settings.MASTER_NODE_URL + '/ws/register_node/'
     current_node_url = settings.CURRENT_NODE_URL
-    retry_attempts = 5  # Increased retry attempts for robustness
-    retry_delay = 5  # Delay between retries
+    retry_attempts = 5
+    retry_delay = 5
 
     logger.debug(f"MASTER_NODE_URL: {settings.MASTER_NODE_URL}")
     logger.debug(f"CURRENT_NODE_URL: {settings.CURRENT_NODE_URL}")
@@ -35,8 +35,9 @@ async def register_with_master_node_async():
                     response_data = json.loads(response)
                     logger.debug(f"Response from master node: {response_data}")
                     if response_data.get("status") == "success":
-                        logger.info("Successfully registered with master node.")
-                        return
+                        multiaddress = response_data.get("multiaddress")
+                        logger.info(f"Successfully registered with master node. Multiaddress: {multiaddress}")
+                        return multiaddress
                     else:
                         logger.error(f"Failed to register with master node. Response: {response_data}")
                         if response_data.get("message") == "Node already registered or invalid URL":
@@ -53,6 +54,3 @@ async def register_with_master_node_async():
         logger.error("Max retry attempts reached. Could not register with master node.")
     else:
         logger.error("MASTER_NODE_URL or CURRENT_NODE_URL is not set.")
-
-if __name__ == "__main__":
-    asyncio.run(register_with_master_node_async())
