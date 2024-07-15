@@ -2463,3 +2463,594 @@ class QuantumSyncConsumer(AsyncWebsocketConsumer):
                 logger.info("Successfully synced wallets from master node")
         except Exception as e:
             logger.error(f"Error syncing wallets from master node: {str(e)}")
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+class QuantumSyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        from .register_with_master import register_with_master_node_async
+
+        await self.channel_layer.group_add("node_sync_group", self.channel_name)
+        await self.accept()
+        logger.info("QuantumSyncConsumer connected")
+        await self.register_and_sync_from_master()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("node_sync_group", self.channel_name)
+        logger.info(f"QuantumSyncConsumer disconnected with close code {close_code}")
+
+    async def sync_wallet(self, event):
+        import json
+
+        wallet_data = event['wallet_data']
+        logger.debug(f"Received wallet data for sync: {wallet_data}")
+        await self.create_wallet(wallet_data)
+
+        # Send sync status update to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'sync_status',
+            'status': 'Wallet synced',
+            'wallet_data': wallet_data
+        }))
+
+        # Broadcast using libp2p
+        await self.broadcast_wallet_libp2p(wallet_data)
+
+    @sync_to_async
+    def create_wallet(self, wallet_data):
+        from .models import Wallet, User
+
+        try:
+            user, created = User.objects.get_or_create(username=wallet_data['public_key'])
+            if created:
+                Wallet.objects.create(
+                    user=user,
+                    public_key=wallet_data['public_key'],
+                    address=wallet_data['address'],
+                    alias=wallet_data['alias'],
+                    balance=wallet_data['balance']
+                )
+                logger.info(f"Wallet synchronized: {wallet_data['public_key']}")
+            else:
+                logger.info(f"Wallet already exists: {wallet_data['public_key']}")
+        except Exception as e:
+            logger.error(f"Error creating wallet: {str(e)}")
+
+    async def broadcast_wallet_libp2p(self, wallet_data):
+        import json
+        from .libp2p_node import start_node
+
+        node = await start_node()
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+
+                    # Send libp2p status update to the frontend
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Broadcasted wallet data',
+                        'peer_id': peer_id.pretty()
+                    }))
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Error broadcasting wallet data',
+                        'peer_id': peer_id.pretty(),
+                        'error': str(e)
+                    }))
+
+    async def receive(self, text_data):
+        import json
+
+        logger.debug(f"Received raw text data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            if 'type' in data and data['type'] == 'sync_wallet':
+                await self.sync_wallet(data)
+            elif 'action' in data and data['action'] == 'register_peer':
+                await self.register_peer(data['peer_info'])
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError: {str(e)}")
+            logger.error(f"Received invalid JSON: {text_data}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON format'
+            }))
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Unexpected error occurred'
+            }))
+
+    @sync_to_async
+    def register_peer(self, peer_info):
+        from .models import Peer
+
+        try:
+            peer, created = Peer.objects.get_or_create(
+                address=peer_info['address'],
+                peer_id=peer_info['peer_id']
+            )
+            if created:
+                logger.info(f"Registered new peer: {peer_info}")
+            else:
+                logger.info(f"Peer already exists: {peer_info}")
+        except Exception as e:
+            logger.error(f"Error registering peer: {str(e)}")
+
+    async def register_and_sync_from_master(self):
+        from .register_with_master import register_with_master_node_async
+
+        try:
+            multiaddress = await register_with_master_node_async()
+            if multiaddress:
+                # Use multiaddress for further operations, like syncing wallets
+                logger.info(f"Using multiaddress {multiaddress} for syncing wallets")
+                await self.sync_wallets_from_master(multiaddress)
+        except Exception as e:
+            logger.error(f"Error during registration and syncing: {str(e)}")
+
+    async def sync_wallets_from_master(self, multiaddress):
+        import json
+        import websockets
+
+        try:
+            async with websockets.connect(multiaddress + '/ws/sync_wallets/', timeout=10) as websocket:
+                await websocket.send(json.dumps({'action': 'fetch_wallets'}))
+                response = await websocket.recv()
+                wallet_list = json.loads(response)
+                for wallet_data in wallet_list:
+                    await self.create_wallet(wallet_data)
+                logger.info("Successfully synced wallets from master node")
+        except Exception as e:
+            logger.error(f"Error syncing wallets from master node: {str(e)}")
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+class QuantumSyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        from .register_with_master import register_with_master_node_async
+
+        await self.channel_layer.group_add("node_sync_group", self.channel_name)
+        await self.accept()
+        logger.info("QuantumSyncConsumer connected")
+        await self.register_and_sync_from_master()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("node_sync_group", self.channel_name)
+        logger.info(f"QuantumSyncConsumer disconnected with close code {close_code}")
+
+    async def sync_wallet(self, event):
+        import json
+
+        wallet_data = event['wallet_data']
+        logger.debug(f"Received wallet data for sync: {wallet_data}")
+        await self.create_wallet(wallet_data)
+
+        # Send sync status update to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'sync_status',
+            'status': 'Wallet synced',
+            'wallet_data': wallet_data
+        }))
+
+        # Broadcast using libp2p
+        await self.broadcast_wallet_libp2p(wallet_data)
+
+    @sync_to_async
+    def create_wallet(self, wallet_data):
+        from .models import Wallet, User
+
+        try:
+            user, created = User.objects.get_or_create(username=wallet_data['public_key'])
+            if created:
+                Wallet.objects.create(
+                    user=user,
+                    public_key=wallet_data['public_key'],
+                    address=wallet_data['address'],
+                    alias=wallet_data['alias'],
+                    balance=wallet_data['balance']
+                )
+                logger.info(f"Wallet synchronized: {wallet_data['public_key']}")
+            else:
+                logger.info(f"Wallet already exists: {wallet_data['public_key']}")
+        except Exception as e:
+            logger.error(f"Error creating wallet: {str(e)}")
+
+    async def broadcast_wallet_libp2p(self, wallet_data):
+        import json
+        from .libp2p_node import start_node
+
+        node = await start_node()
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+
+                    # Send libp2p status update to the frontend
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Broadcasted wallet data',
+                        'peer_id': peer_id.pretty()
+                    }))
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Error broadcasting wallet data',
+                        'peer_id': peer_id.pretty(),
+                        'error': str(e)
+                    }))
+
+    async def receive(self, text_data):
+        import json
+
+        logger.debug(f"Received raw text data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            if 'type' in data and data['type'] == 'sync_wallet':
+                await self.sync_wallet(data)
+            elif 'action' in data and data['action'] == 'register_peer':
+                await self.register_peer(data['peer_info'])
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError: {str(e)}")
+            logger.error(f"Received invalid JSON: {text_data}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON format'
+            }))
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Unexpected error occurred'
+            }))
+
+    @sync_to_async
+    def register_peer(self, peer_info):
+        from .models import Peer
+
+        try:
+            peer, created = Peer.objects.get_or_create(
+                address=peer_info['address'],
+                peer_id=peer_info['peer_id']
+            )
+            if created:
+                logger.info(f"Registered new peer: {peer_info}")
+            else:
+                logger.info(f"Peer already exists: {peer_info}")
+        except Exception as e:
+            logger.error(f"Error registering peer: {str(e)}")
+
+    async def register_and_sync_from_master(self):
+        from .register_with_master import register_with_master_node_async
+
+        try:
+            multiaddress = await register_with_master_node_async()
+            if multiaddress:
+                # Use multiaddress for further operations, like syncing wallets
+                logger.info(f"Using multiaddress {multiaddress} for syncing wallets")
+                await self.sync_wallets_from_master(multiaddress)
+        except Exception as e:
+            logger.error(f"Error during registration and syncing: {str(e)}")
+
+    async def sync_wallets_from_master(self, multiaddress):
+        import json
+        import websockets
+
+        try:
+            async with websockets.connect(multiaddress + '/ws/sync_wallets/', timeout=10) as websocket:
+                await websocket.send(json.dumps({'action': 'fetch_wallets'}))
+                response = await websocket.recv()
+                wallet_list = json.loads(response)
+                for wallet_data in wallet_list:
+                    await self.create_wallet(wallet_data)
+                logger.info("Successfully synced wallets from master node")
+        except Exception as e:
+            logger.error(f"Error syncing wallets from master node: {str(e)}")
+import logging
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+class QuantumSyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        from .register_with_master import register_with_master_node_async
+
+        await self.channel_layer.group_add("node_sync_group", self.channel_name)
+        await self.accept()
+        logger.info("QuantumSyncConsumer connected")
+        await self.register_and_sync_from_master()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("node_sync_group", self.channel_name)
+        logger.info(f"QuantumSyncConsumer disconnected with close code {close_code}")
+
+    async def sync_wallet(self, event):
+        import json
+
+        wallet_data = event['wallet_data']
+        logger.debug(f"Received wallet data for sync: {wallet_data}")
+        await self.create_wallet(wallet_data)
+
+        # Send sync status update to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'sync_status',
+            'status': 'Wallet synced',
+            'wallet_data': wallet_data
+        }))
+
+        # Broadcast using libp2p
+        await self.broadcast_wallet_libp2p(wallet_data)
+
+    @sync_to_async
+    def create_wallet(self, wallet_data):
+        from .models import Wallet, User
+
+        try:
+            user, created = User.objects.get_or_create(username=wallet_data['public_key'])
+            if created:
+                Wallet.objects.create(
+                    user=user,
+                    public_key=wallet_data['public_key'],
+                    address=wallet_data['address'],
+                    alias=wallet_data['alias'],
+                    balance=wallet_data['balance']
+                )
+                logger.info(f"Wallet synchronized: {wallet_data['public_key']}")
+            else:
+                logger.info(f"Wallet already exists: {wallet_data['public_key']}")
+        except Exception as e:
+            logger.error(f"Error creating wallet: {str(e)}")
+
+    async def broadcast_wallet_libp2p(self, wallet_data):
+        import json
+        from .libp2p_node import start_node
+
+        node = start_node()
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+
+                    # Send libp2p status update to the frontend
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Broadcasted wallet data',
+                        'peer_id': peer_id.pretty()
+                    }))
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Error broadcasting wallet data',
+                        'peer_id': peer_id.pretty(),
+                        'error': str(e)
+                    }))
+
+    async def receive(self, text_data):
+        import json
+
+        logger.debug(f"Received raw text data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            if 'type' in data and data['type'] == 'sync_wallet':
+                await self.sync_wallet(data)
+            elif 'action' in data and data['action'] == 'register_peer':
+                await self.register_peer(data['peer_info'])
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError: {str(e)}")
+            logger.error(f"Received invalid JSON: {text_data}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON format'
+            }))
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Unexpected error occurred'
+            }))
+
+    @sync_to_async
+    def register_peer(self, peer_info):
+        from .models import Peer
+
+        try:
+            peer, created = Peer.objects.get_or_create(
+                address=peer_info['address'],
+                peer_id=peer_info['peer_id']
+            )
+            if created:
+                logger.info(f"Registered new peer: {peer_info}")
+            else:
+                logger.info(f"Peer already exists: {peer_info}")
+        except Exception as e:
+            logger.error(f"Error registering peer: {str(e)}")
+
+    async def register_and_sync_from_master(self):
+        from .register_with_master import register_with_master_node_async
+
+        try:
+            multiaddress = await register_with_master_node_async()
+            if multiaddress:
+                # Use multiaddress for further operations, like syncing wallets
+                logger.info(f"Using multiaddress {multiaddress} for syncing wallets")
+                await self.sync_wallets_from_master(multiaddress)
+        except Exception as e:
+            logger.error(f"Error during registration and syncing: {str(e)}")
+
+    async def sync_wallets_from_master(self, multiaddress):
+        import json
+        import websockets
+
+        try:
+            async with websockets.connect(multiaddress + '/ws/sync_wallets/', timeout=10) as websocket:
+                await websocket.send(json.dumps({'action': 'fetch_wallets'}))
+                response = await websocket.recv()
+                wallet_list = json.loads(response)
+                for wallet_data in wallet_list:
+                    await self.create_wallet(wallet_data)
+                logger.info("Successfully synced wallets from master node")
+        except Exception as e:
+            logger.error(f"Error syncing wallets from master node: {str(e)}")
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+from asgiref.sync import sync_to_async
+import logging
+
+logger = logging.getLogger(__name__)
+
+class QuantumSyncConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        await self.channel_layer.group_add("node_sync_group", self.channel_name)
+        await self.accept()
+        logger.info("QuantumSyncConsumer connected")
+        await self.register_and_sync_from_master()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard("node_sync_group", self.channel_name)
+        logger.info(f"QuantumSyncConsumer disconnected with close code {close_code}")
+
+    async def sync_wallet(self, event):
+        wallet_data = event['wallet_data']
+        logger.debug(f"Received wallet data for sync: {wallet_data}")
+        await self.create_wallet(wallet_data)
+
+        # Send sync status update to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'sync_status',
+            'status': 'Wallet synced',
+            'wallet_data': wallet_data
+        }))
+
+        # Broadcast using libp2p
+        await self.broadcast_wallet_libp2p(wallet_data)
+
+    @sync_to_async
+    def create_wallet(self, wallet_data):
+        from .models import Wallet, User
+
+        try:
+            user, created = User.objects.get_or_create(username=wallet_data['public_key'])
+            if created:
+                Wallet.objects.create(
+                    user=user,
+                    public_key=wallet_data['public_key'],
+                    address=wallet_data['address'],
+                    alias=wallet_data['alias'],
+                    balance=wallet_data['balance']
+                )
+                logger.info(f"Wallet synchronized: {wallet_data['public_key']}")
+            else:
+                logger.info(f"Wallet already exists: {wallet_data['public_key']}")
+        except Exception as e:
+            logger.error(f"Error creating wallet: {str(e)}")
+
+    async def broadcast_wallet_libp2p(self, wallet_data):
+        from .libp2p_node import start_node
+
+        node = start_node()
+        for peer_id in node.peerstore.peer_ids():
+            if peer_id != node.get_id():
+                try:
+                    stream = await node.new_stream(peer_id, ["/echo/1.0.0"])
+                    await stream.write(json.dumps(wallet_data).encode("utf-8"))
+                    logger.info(f"Broadcasted wallet data to peer {peer_id.pretty()}")
+
+                    # Send libp2p status update to the frontend
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Broadcasted wallet data',
+                        'peer_id': peer_id.pretty()
+                    }))
+                except Exception as e:
+                    logger.error(f"Error broadcasting wallet data to peer {peer_id.pretty()}: {str(e)}")
+                    await self.send(text_data=json.dumps({
+                        'type': 'libp2p_status',
+                        'status': 'Error broadcasting wallet data',
+                        'peer_id': peer_id.pretty(),
+                        'error': str(e)
+                    }))
+
+    async def receive(self, text_data):
+        logger.debug(f"Received raw text data: {text_data}")
+        try:
+            data = json.loads(text_data)
+            if 'type' in data and data['type'] == 'sync_wallet':
+                await self.sync_wallet(data)
+            elif 'action' in data and data['action'] == 'register_peer':
+                await self.register_peer(data['peer_info'])
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError: {str(e)}")
+            logger.error(f"Received invalid JSON: {text_data}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Invalid JSON format'
+            }))
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Unexpected error occurred'
+            }))
+
+    @sync_to_async
+    def register_peer(self, peer_info):
+        from .models import Peer
+
+        try:
+            peer, created = Peer.objects.get_or_create(
+                address=peer_info['address'],
+                peer_id=peer_info['peer_id']
+            )
+            if created:
+                logger.info(f"Registered new peer: {peer_info}")
+            else:
+                logger.info(f"Peer already exists: {peer_info}")
+        except Exception as e:
+            logger.error(f"Error registering peer: {str(e)}")
+
+    async def register_and_sync_from_master(self):
+        from .register_with_master import register_with_master_node_async
+
+        try:
+            multiaddress = await register_with_master_node_async()
+            if multiaddress:
+                logger.info(f"Using multiaddress {multiaddress} for syncing wallets")
+                await self.sync_wallets_from_master(multiaddress)
+        except Exception as e:
+            logger.error(f"Error during registration and syncing: {str(e)}")
+
+    async def sync_wallets_from_master(self, multiaddress):
+        import websockets
+
+        try:
+            async with websockets.connect(multiaddress + '/ws/sync_wallets/', timeout=10) as websocket:
+                await websocket.send(json.dumps({'action': 'fetch_wallets'}))
+                response = await websocket.recv()
+                wallet_list = json.loads(response)
+                for wallet_data in wallet_list:
+                    await self.create_wallet(wallet_data)
+                logger.info("Successfully synced wallets from master node")
+        except Exception as e:
+            logger.error(f"Error syncing wallets from master node: {str(e)}")
