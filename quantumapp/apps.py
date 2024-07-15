@@ -1,38 +1,33 @@
+# apps.py (QuantumappConfig)
 from django.apps import AppConfig
 import threading
 import logging
 import subprocess
 import os
 import time
-import asyncio
-import websockets
-import json
 
 logger = logging.getLogger(__name__)
 
-# The list to keep track of registered nodes
-registered_nodes = []
+class QuantumappConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'quantumapp'
 
-async def quantum_net_master(websocket, path):
-    async for message in websocket:
-        data = json.loads(message)
-        
-        if data["action"] == "register":
-            multiaddress = data["multiaddress"]
-            registered_nodes.append(multiaddress)
-            await websocket.send(json.dumps({"status": "registered"}))
-        
-        elif data["action"] == "get_peers":
-            await websocket.send(json.dumps({"peers": registered_nodes}))
+    def ready(self):
+        from django.db.models.signals import post_migrate
+        from django.dispatch import receiver
 
-async def main():
-    async with websockets.serve(quantum_net_master, "localhost", 8765):
-        await asyncio.Future()  # run forever
-
-def start_websocket_server():
-    asyncio.run(main())
+        @receiver(post_migrate)
+        def startup_tasks(sender, **kwargs):
+            logger.info("Starting register with master node script")
+            threading.Thread(target=run_script_with_retries, args=('register_with_master.py',)).start()
+            logger.info("Starting WebSocket server")
+            threading.Thread(target=start_websocket_server, daemon=True).start()
 
 def run_script_with_retries(script_name, max_retries=5, retry_delay=5):
+    import subprocess
+    import os
+    import time
+
     script_path = os.path.join(os.path.dirname(__file__), script_name)
     retries = 0
 
@@ -59,18 +54,26 @@ def cleanup_and_exit():
     # Exit the application
     exit(1)
 
-class QuantumappConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'quantumapp'
+def start_websocket_server():
+    import asyncio
+    import websockets
 
-    def ready(self):
-        # Ensure Django is fully ready before running the startup tasks
-        from django.db.models.signals import post_migrate
-        from django.dispatch import receiver
+    async def quantum_net_master(websocket, path):
+        import json
+        registered_nodes = []
+        async for message in websocket:
+            data = json.loads(message)
+            
+            if data["action"] == "register":
+                multiaddress = data["multiaddress"]
+                registered_nodes.append(multiaddress)
+                await websocket.send(json.dumps({"status": "registered"}))
+            
+            elif data["action"] == "get_peers":
+                await websocket.send(json.dumps({"peers": registered_nodes}))
 
-        @receiver(post_migrate)
-        def startup_tasks(sender, **kwargs):
-            logger.info("Starting register with master node script")
-            threading.Thread(target=run_script_with_retries, args=('register_with_master.py',)).start()
-            logger.info("Starting WebSocket server")
-            threading.Thread(target=start_websocket_server, daemon=True).start()
+    async def main():
+        async with websockets.serve(quantum_net_master, "localhost", 8765):
+            await asyncio.Future()  # run forever
+
+    asyncio.run(main())
