@@ -241,3 +241,95 @@ async def broadcast_transaction(transaction_data):
 
 def sync_transaction(transaction_data):
     asyncio.run(broadcast_transaction(transaction_data))
+# utils.py
+import re
+import multiaddr
+from libp2p import new_host
+import trio
+
+def get_libp2p_peer_info(url):
+    match = re.match(r'ws://([\d\.]+|\w+)(?::(\d+))?', url)
+    if match:
+        ip = match.group(1)
+        port = match.group(2) or '4001'  # Replace '4001' with your desired default port
+
+        # Generate a new host and extract the peer ID
+        async def generate_peer_id():
+            host = new_host()
+            return host.get_id().pretty()
+
+        # Run the trio event loop to generate the peer ID
+        peer_id = trio.run(generate_peer_id)
+
+        multiaddress = f"/ip4/{ip}/tcp/{port}/p2p/{peer_id}"
+        return multiaddress
+    else:
+        raise ValueError("Invalid URL format")
+# quantumapp/utils.py
+
+import trio
+import multiaddr
+from libp2p import new_host
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.typing import TProtocol
+import websockets
+
+PROTOCOL_ID = TProtocol("/transaction/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        read_bytes = await stream.read(MAX_READ_LEN)
+        if read_bytes:
+            read_string = read_bytes.decode()
+            if read_string != "\n":
+                print(f"Received: {read_string}")
+
+async def write_data(stream: INetStream, transaction_data: str) -> None:
+    await stream.write(transaction_data.encode())
+    print(f"Sent: {transaction_data}")
+
+async def run_masternode(port: int) -> str:
+    listen_addr = multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")
+    host = new_host()  # Synchronous call
+
+    async def host_service(nursery):
+        async with host.run(listen_addrs=[listen_addr]):
+            async def stream_handler(stream: INetStream) -> None:
+                nursery.start_soon(read_data, stream)
+            host.set_stream_handler(PROTOCOL_ID, stream_handler)
+            master_node_url = f"/ip4/0.0.0.0/tcp/{port}/p2p/{host.get_id().pretty()}"
+            print(f"Master node multiaddress: {master_node_url}")
+            await trio.sleep_forever()
+    
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(host_service, nursery)
+        master_node_url = f"/ip4/0.0.0.0/tcp/{port}/p2p/{host.get_id().pretty()}"
+        return master_node_url
+
+async def websocket_handler(websocket, path, master_node_url):
+    await websocket.send(master_node_url)
+    print(f"Sent multiaddress: {master_node_url}")
+
+async def run_websocket_server(master_node_url, ws_port=8765):
+    async with websockets.serve(lambda ws, path: websocket_handler(ws, path, master_node_url), "localhost", ws_port):
+        print(f"WebSocket server listening on ws://localhost:{ws_port}")
+        await trio.sleep_forever()
+
+async def fetch_masternode_address(ws_url: str) -> str:
+    async with websockets.connect(ws_url) as websocket:
+        master_node_url = await websocket.recv()
+        print(f"Received multiaddress: {master_node_url}")
+        return master_node_url
+
+async def join_network(multiaddr_str: str) -> None:
+    host = new_host()  # Synchronous call
+
+    maddr = multiaddr.Multiaddr(multiaddr_str)
+    info = info_from_p2p_addr(maddr)
+    await host.connect(info)
+    stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+    
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(read_data, stream)
+        nursery.start_soon(write_data, stream)

@@ -15,7 +15,7 @@ django.setup()
 
 logger = logging.getLogger(__name__)
 
-async def register_with_master_node_async():
+async def register_with_master_node_sync():
     master_node_url = settings.MASTER_NODE_URL + '/ws/register_node/'
     current_node_url = settings.CURRENT_NODE_URL
     retry_attempts = 1

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dagknight Node System Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #fff;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        pre {
+            background: #272822;
+            color: #f8f8f2;
+            padding: 20px;
+            overflow: auto;
+        }
+        .console-log {
+            height: 400px;
+            overflow-y: scroll;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: #f7f7f7;
+            color: #444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Dagknight Node System Test</h1>
+        <div class="console-log" id="console-log"></div>
+        <button id="start-node">Start Node</button>
+        <button id="connect-to-master">Connect to Master</button>
+    </div>
+    <script>
+        const ws = new WebSocket('ws://localhost:8765/ws/register_node/');
+        const consoleLog = document.getElementById('console-log');
+        const startNodeButton = document.getElementById('start-node');
+        const connectButton = document.getElementById('connect-to-master');
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            consoleLog.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        };
+
+        startNodeButton.onclick = function() {
+            fetch('/start_node/', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    consoleLog.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                });
+        };
+
+        connectButton.onclick = function() {
+            fetch('/connect_to_master/', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    consoleLog.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                });
+        };
+		
+    </script>
+	  
+	
+</body>
+</html>

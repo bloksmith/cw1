@@ -1,5 +1,7 @@
+# myquantumproject/urls.py
+
 from django.contrib import admin
-from django.urls import path, re_path  # Added re_path import
+from django.urls import path, include, re_path
 from quantumapp import views
 from django.conf import settings
 from django.conf.urls.static import static
@@ -73,9 +75,14 @@ urlpatterns = [
     path('veilid/send-data/', views.send_data, name='send_data'),
     path('veilid/receive-data/', views.receive_data, name='receive_data'),
     path('veilid/get-peers/', views.get_peers, name='get_peers'),  # New endpoint for getting peers
-
+    path('register_master_node/', include('quantumapp.urls')),  # Include quantumapp URLs with namespace
     path('veilid/', views.veilid_index, name='veilid_index'),  # New unique path
-
-
+    path('api/test_message/', views.test_message, name='test_message'),
+    path('web_ui/', views.web_ui, name='web_ui'),
+    path('test/', views.test_view, name='test'),
+    path('start_node/', views.start_node, name='start_node'),
+    path('connect_to_master/', views.connect_to_master, name='connect_to_master'),
+    path('api/transaction_pool/', views.transaction_pool, name='transaction_pool'),
+    path('transactions', views.transaction_endpoint, name='transaction_endpoint'),
 
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

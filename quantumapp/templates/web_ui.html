@@ -1,0 +1,22 @@
+<!-- web_ui.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Libp2p Transaction Test</title>
+</head>
+<body>
+    <h1>Libp2p Transaction Test</h1>
+    <form id="transactionForm" method="post" action="/create_transaction/">
+        <label for="sender">Sender Address:</label>
+        <input type="text" id="sender" name="sender"><br>
+        <label for="receiver">Receiver Address:</label>
+        <input type="text" id="receiver" name="receiver"><br>
+        <label for="amount">Amount:</label>
+        <input type="text" id="amount" name="amount"><br>
+        <button type="submit">Create Transaction</button>
+    </form>
+    <h2>Logs</h2>
+    <textarea id="logs" rows="20" cols="100">{{ logs }}</textarea>
+</body>
+</html>

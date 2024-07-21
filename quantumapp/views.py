@@ -8577,11 +8577,14 @@ def node_list(request):
     nodes = Node.objects.all()
     return render(request, 'node_list.html', {'nodes': nodes})
 @csrf_exempt
+
 def register_node(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            address = data.get("address")
+            logger.debug(f"Received data for node registration: {data}")
+            
+            address = data.get("node_address")
             public_key = data.get("public_key")
             if address and public_key:
                 node, created = Node.objects.get_or_create(
@@ -8592,11 +8595,17 @@ def register_node(request):
                     # Update the public_key and last_seen if node already exists
                     node.public_key = public_key
                     node.save()
-                return JsonResponse({"status": "success"})
-            return JsonResponse({"status": "error", "message": "Invalid data"})
+                return JsonResponse({"status": "registered", "node": address})
+            logger.error("Invalid data received for node registration")
+            return JsonResponse({"status": "error", "message": "Invalid data"}, status=400)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
         except Exception as e:
+            logger.error(f"Unexpected error: {e}")
             return JsonResponse({"status": "error", "message": str(e)}, status=500)
-    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=400)
+    return JsonResponse({"status": "error", "message": "Only POST method allowed"}, status=405)
+
 # quantumapp/views.py
 def mine_single_block(user, shard_id):
     global mining_statistics
@@ -20185,3 +20194,317 @@ async def get_peers_async(master_url):
         logger.error(f"Error in get_peers_async: {str(e)}")
         logger.error(traceback.format_exc())
         return {'error': str(e), 'traceback': traceback.format_exc()}
+# quantumapp/views.py
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.models import User
+from .models import Node
+from .forms import RegisterMasterNodeForm
+import json
+
+@csrf_exempt
+def register_master_node(request):
+    if request.method == 'POST':
+        try:
+            logger.debug('Received POST request to register master node')
+            data = json.loads(request.body)
+            logger.debug(f'Received data: {data}')
+            username = data.get('username')
+            password = data.get('password')
+            node_address = data.get('node_address')
+            public_key = data.get('public_key')
+
+            # Ensure all required data is provided
+            if not all([username, password, node_address, public_key]):
+                return JsonResponse({'error': 'Missing required parameters'}, status=400)
+
+            # Create user if it does not exist
+            user, created = User.objects.get_or_create(username=username, defaults={'password': password})
+            logger.debug(f'User created: {created}, User: {user}')
+
+            # Create Node entry
+            node, created = Node.objects.get_or_create(
+                address=node_address,
+                defaults={'public_key': public_key, 'last_seen': timezone.now()}
+            )
+            logger.debug(f'Node created: {created}, Node: {node}')
+
+            return JsonResponse({'status': 'registered', 'node': node.address}, status=200)
+        except Exception as e:
+            logger.error(f'Error occurred: {e}', exc_info=True)
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Invalid request method'}, status=405)
+# views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def test_message(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        message = data.get('message')
+        # Log or process the message as needed
+        print(f"Received test message: {message}")
+        return JsonResponse({'status': 'success', 'message': message})
+    return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+# views.py
+import json
+import logging
+import subprocess
+import sys
+import time
+import trio
+import multiaddr
+from decimal import Decimal
+from django.http import JsonResponse, HttpResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import csrf_exempt
+from .models import Wallet, PendingTransaction, Shard
+from libp2p import new_host
+from libp2p.peer.peerinfo import info_from_p2p_addr
+from libp2p.network.stream.net_stream_interface import INetStream
+from libp2p.typing import TProtocol
+
+PROTOCOL_ID = TProtocol("/transaction/1.0.0")
+MAX_READ_LEN = 2**32 - 1
+
+logs = []
+
+async def read_data(stream: INetStream) -> None:
+    while True:
+        read_bytes = await stream.read(MAX_READ_LEN)
+        if read_bytes:
+            read_string = read_bytes.decode()
+            if read_string != "\n":
+                log_message = f"\x1b[32m {read_string}\x1b[0m "
+                logs.append(log_message)
+
+async def write_data(stream: INetStream, transaction_data: str) -> None:
+    await stream.write(transaction_data.encode())
+    logs.append(f"Sent transaction data: {transaction_data}")
+
+    async_f = trio.wrap_file(sys.stdin)
+    while True:
+        line = await async_f.readline()
+        await stream.write(line.encode())
+
+async def run_libp2p(port: int, destination: str, transaction_data: str = None) -> None:
+    localhost_ip = "127.0.0.1"
+    listen_addr = multiaddr.Multiaddr(f"/ip4/0.0.0.0/tcp/{port}")
+    host = new_host()  # Synchronous call
+
+    async def host_service(nursery):
+        async with host.run(listen_addrs=[listen_addr]):
+            if not destination:
+                async def stream_handler(stream: INetStream) -> None:
+                    nursery.start_soon(read_data, stream)
+                    if transaction_data:
+                        nursery.start_soon(write_data, stream, transaction_data)
+                host.set_stream_handler(PROTOCOL_ID, stream_handler)
+                master_node_url = f"/ip4/{localhost_ip}/tcp/{port}/p2p/{host.get_id().pretty()}"
+                logs.append(f"Master node libp2p URL: {master_node_url}")
+                logs.append("Waiting for incoming connection...")
+            else:
+                maddr = multiaddr.Multiaddr(destination)
+                info = info_from_p2p_addr(maddr)
+                await host.connect(info)
+                stream = await host.new_stream(info.peer_id, [PROTOCOL_ID])
+                nursery.start_soon(read_data, stream)
+                if transaction_data:
+                    nursery.start_soon(write_data, stream, transaction_data)
+                logs.append(f"Connected to peer {info.addrs[0]}")
+            await trio.sleep_forever()
+    
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(host_service, nursery)
+
+@csrf_exempt
+def create_transaction(request):
+    if request.method == 'POST':
+        start_time = time.time()  # Record start time
+        try:
+            data = request.POST
+            logging.debug(f"Request data: {data}")
+
+            sender_address = data.get('sender')
+            receiver_address = data.get('receiver')
+            amount = data.get('amount')
+
+            if not sender_address or not receiver_address or not amount:
+                logging.error("Missing required fields in the request")
+                return JsonResponse({'error': 'All fields (sender, receiver, amount) are required'}, status=400)
+
+            try:
+                amount = Decimal(amount)
+            except Exception as e:
+                logging.error(f"Invalid amount: {e}")
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+
+            sender = Wallet.objects.get(address=sender_address)
+            receiver = Wallet.objects.get(address=receiver_address)
+            shard = Shard.objects.first()
+
+            congestion_factor = get_network_congestion_factor()
+            fee = (amount * congestion_factor) / Decimal('100000000')
+
+            if sender.balance < (amount + fee):
+                logging.error("Insufficient balance for the transaction")
+                return JsonResponse({'error': 'Insufficient balance'}, status=400)
+
+            transaction_hash = generate_unique_hash()
+            signature = "simulated_signature"
+
+            pending_transaction = PendingTransaction(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                fee=fee,
+                hash=transaction_hash,
+                signature=signature,
+                shard=shard,
+                is_approved=True  # Immediately approve the transaction
+            )
+            pending_transaction.save()
+            logging.info(f"Pending transaction saved and approved: {pending_transaction}")
+
+            # Process the transaction immediately
+            process_transaction(pending_transaction)
+
+            transaction_data = json.dumps({
+                "type": "transaction_sync",
+                "transactions": [
+                    {
+                        "hash": transaction_hash,
+                        "sender": sender_address,
+                        "receiver": receiver_address,
+                        "amount": float(amount),
+                        "fee": float(fee),
+                        "timestamp": str(pending_transaction.timestamp),
+                        "is_approved": True,
+                        "shard": shard.name
+                    }
+                ]
+            })
+
+            # Sync with peers
+            trio.run(run, 8001, None, transaction_data)
+
+            approval_time = round(time.time() - start_time, 2)  # Calculate approval time
+            logging.info(f"Transaction {transaction_hash} submitted for batching")
+            return JsonResponse({'message': 'Transaction submitted for batching', 'transaction_hash': transaction_hash,
+                                 'approval_time': approval_time})
+
+        except Wallet.DoesNotExist:
+            logging.error("Wallet not found")
+            return JsonResponse({'error': 'Wallet not found'}, status=404)
+        except Exception as e:
+            logging.error(f"Error creating transaction: {e}")
+            return JsonResponse({'error': str(e)}, status=500)
+    else:
+        logging.error("Invalid request method")
+        return JsonResponse({'error': 'Only POST method allowed'}, status=400)
+
+def web_ui(request):
+    return render(request, 'web_ui.html', {'logs': '\n'.join(logs)})
+from django.shortcuts import render
+
+def test_view(request):
+    return render(request, 'test_page.html')
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from threading import Thread
+
+master_node_url_storage = []
+
+def run_masternode_and_ws_wrapper(port, ws_port):
+    global master_node_url_storage
+    master_node_url = run_start_masternode_and_ws(port, ws_port)
+    master_node_url_storage.append(master_node_url)
+
+@csrf_exempt
+def start_node(request):
+    if request.method == 'POST':
+        port = 8001
+        ws_port = 8765
+        thread = Thread(target=run_start_masternode_and_ws, args=(port, ws_port))
+        thread.start()
+        return JsonResponse({"status": "Node starting"}, status=200)
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+
+@csrf_exempt
+def connect_to_master(request):
+    if request.method == 'POST':
+        ws_url = 'ws://localhost:8765'  # WebSocket URL to get the master node's multiaddress
+        master_node_url = asyncio.run(fetch_masternode_address(ws_url))
+        return JsonResponse({'message': 'Connected to master', 'master_node_url': master_node_url})
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+transaction_pool = []
+
+async def sync_transaction_pool(host):
+    while True:
+        for peer_id in host.get_peerstore().peers():
+            stream = await host.new_stream(peer_id, [PROTOCOL_ID])
+            await stream.write(b'GET_TRANSACTIONS')
+            response = await stream.read(MAX_READ_LEN)
+            new_transactions = json_to_transaction(response.decode())
+            for transaction in new_transactions:
+                if validate_transaction(transaction):
+                    transaction_pool.append(transaction)
+            await stream.close()
+        await trio.sleep(30)  # sync every 30 seconds
+from typing import Dict, Any  # Add this line if it's not already present
+
+def validate_transaction(transaction: Dict[str, Any]) -> bool:
+    # Implement your validation logic here (e.g., check balances, signatures, etc.)
+    return True
+async def broadcast_transaction(host, transaction: Dict[str, Any]):
+    for peer_id in host.get_peerstore().peers():
+        stream = await host.new_stream(peer_id, [PROTOCOL_ID])
+        await stream.write(transaction_to_json(transaction).encode())
+        await stream.close()
+import json
+import time
+from decimal import Decimal
+from typing import Dict, Any
+
+def create_transaction(sender: str, receiver: str, amount: Decimal, fee: Decimal, hash: str, timestamp: str, shard: str) -> Dict[str, Any]:
+    return {
+        'hash': hash,
+        'sender': sender,
+        'receiver': receiver,
+        'amount': float(amount),
+        'fee': float(fee),
+        'timestamp': timestamp,
+        'is_approved': True,
+        'shard': shard
+    }
+
+def transaction_to_json(transaction: Dict[str, Any]) -> str:
+    return json.dumps(transaction)
+
+def json_to_transaction(json_str: str) -> Dict[str, Any]:
+    return json.loads(json_str)
+from django.http import JsonResponse
+from quantumapp.models import Transaction
+
+def transaction_pool(request):
+    transactions = Transaction.objects.all()
+    data = [transaction_to_dict(tx) for tx in transactions]
+    return JsonResponse(data, safe=False)
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+@csrf_exempt
+def transaction_endpoint(request):
+    if request.method == 'POST':
+        try:
+            transaction_data = json.loads(request.body)
+            logger.debug(f"Received transaction: {transaction_data}")
+            return JsonResponse({"status": "success", "data": transaction_data})
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+    else:
+        logger.error("Invalid request method")
+        return JsonResponse({"error": "Invalid request method"}, status=400)
